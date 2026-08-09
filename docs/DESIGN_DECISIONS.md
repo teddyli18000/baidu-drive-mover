@@ -14,7 +14,7 @@ Reasons:
 - no Python/Node/Conda/WSL requirement for the user;
 - straightforward unit/integration testing in CI.
 
-Baseline module compatibility is Go 1.25. Release/CI builds use the current supported Go 1.26 toolchain unless deliberately changed. The user does not need Go installed for packaged releases.
+Baseline module compatibility is Go 1.26 because the pinned browser automation layer requires it. Release/CI builds use Go 1.26.x unless deliberately changed. The user does not need Go installed for packaged releases.
 
 ## D2. User-facing shape: one executable
 
@@ -30,16 +30,18 @@ The application must determine its executable directory, create/validate `temp/`
 
 No fallback to AppData, system temp, registry, services, or scheduled tasks.
 
-## D4. Baidu integration: reuse proven BaiduPCS-Go behavior, own the orchestration
+## D4. Baidu integration: reuse proven behavior, own the transport/orchestration
 
 Decision:
 
-- use BaiduPCS-Go v4.0.1/current proven API behavior as the primary technical reference and, where practical, a pinned Go dependency for exported primitives;
+- use BaiduPCS-Go v4.0.1/current source behavior as the primary reference for Baidu web API semantics;
 - do not use PR #520 as production logic;
+- implement a small project-owned HTTP adapter for share page access, password verification and recursive listing so request limits, retries, logging and tests remain under our control;
+- reuse or wrap BaiduPCS-Go exported primitives later only where that clearly lowers download/staging risk without weakening the runtime/safety boundary;
 - implement our own recursive share scanner, file-level batch planner, pipeline state, and safety layer;
-- pin exact upstream revisions rather than silently tracking `main`.
+- pin any imported upstream revision rather than silently tracking `main`.
 
-Reason: BaiduPCS-Go already has mature cookie/session, file, mkdir/delete, quota, and download-location behavior, while the >500 recursive batching logic needed here requires stricter correctness than the unmerged PR provides.
+Reason: BaiduPCS-Go provides proven API behavior, but this tool needs stricter control over >500 batching, persistence, retries and local safety than an unmodified CLI dependency provides.
 
 ## D5. Baidu transfer unit is an individual file manifest
 
@@ -49,17 +51,18 @@ Never rely on transferring an oversized directory ID as the fundamental workarou
 
 ## D6. Baidu authentication: dedicated Chrome profile
 
-Decision: when interactive Baidu login is necessary, launch the user's installed Chrome with a tool-owned profile under `temp/chrome-profile/`.
+Decision: when interactive Baidu login is necessary, launch the user's installed Chrome with a tool-owned profile under `temp/chrome-profile/` using `github.com/chromedp/chromedp v0.15.1`.
 
 Rules:
 
 - never inspect or modify the normal Chrome profile;
+- Chrome `TEMP`/`TMP`, disk cache and user-data directory are explicitly redirected under the application's `temp/` tree;
 - session/cookies may be stored locally in plaintext under `temp/`;
 - secrets are never logged or committed;
-- Chrome processes started by the tool are tracked;
-- automation uses a dedicated user-data directory and must not install extensions or alter browser policy.
+- Chrome processes started by the tool are tracked and closed with the login context;
+- automation must not install extensions or alter browser policy/registry.
 
-If reliable direct cookie/session reuse can avoid launching Chrome on later runs, use it.
+If reusable stored cookies remain valid, later runs avoid opening Chrome.
 
 ## D7. Google Drive transport: rclone first, direct Drive API only if clearly superior
 
