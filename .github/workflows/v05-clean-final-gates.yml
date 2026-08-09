@@ -1,0 +1,55 @@
+name: v0.5 clean temporary final gates
+
+on:
+  push:
+    branches: [dev/v0.5-google-drive]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  clean:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: dev/v0.5-google-drive
+          fetch-depth: 0
+      - uses: actions/setup-go@v7
+        with:
+          go-version: '1.26.5'
+          cache: true
+      - name: Sync and assert acceptance evidence
+        run: |
+          set -euo pipefail
+          git fetch origin dev/v0.5-google-drive
+          git reset --hard origin/dev/v0.5-google-drive
+          grep -F 'Windows acceptance: official pinned archive and executable hashes verified, and rclone v1.74.4 executed successfully' docs/RCLONE_PIN.md
+          test -f internal/drive/rclone/listremotes_contract_test.go
+          ! grep -F '"listremotes", "--name"' internal/drive/rclone/auth.go
+          grep -F 'c.RunBase(ctx, "listremotes")' internal/drive/rclone/auth.go
+          gofmt_bad=$(gofmt -l ./cmd ./internal)
+          test -z "$gofmt_bad"
+          go mod tidy
+          git diff --exit-code -- go.mod go.sum
+          go test ./... -count=1
+          go vet ./...
+      - name: Remove one-shot workflows and commit
+        run: |
+          set -euo pipefail
+          for wf in \
+            .github/workflows/v05-rclone-windows-acceptance.yml \
+            .github/workflows/v05-rclone-windows-acceptance-final.yml \
+            .github/workflows/v05-final-contract-fix.yml \
+            .github/workflows/v05-final-contract-fix-v2.yml \
+            .github/workflows/v05-clean-final-gates.yml; do
+            if [ -e "$wf" ]; then git rm -f -- "$wf"; fi
+          done
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git commit -m 'ci(v0.5): remove temporary acceptance gates'
+          git push origin HEAD:dev/v0.5-google-drive
