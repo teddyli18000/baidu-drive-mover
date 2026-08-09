@@ -19,6 +19,8 @@ type Layout struct {
 	Config        string
 	Auth          string
 	ChromeProfile string
+	BrowserTemp   string
+	BrowserCache  string
 	Cache         string
 	Logs          string
 	Tasks         string
@@ -56,6 +58,8 @@ func New(base string) (*Layout, error) {
 		Config:        filepath.Join(temp, "config.json"),
 		Auth:          filepath.Join(temp, "auth"),
 		ChromeProfile: filepath.Join(temp, "chrome-profile"),
+		BrowserTemp:   filepath.Join(temp, "browser-tmp"),
+		BrowserCache:  filepath.Join(temp, "browser-cache"),
 		Cache:         filepath.Join(temp, "cache"),
 		Logs:          filepath.Join(temp, "logs"),
 		Tasks:         filepath.Join(temp, "tasks"),
@@ -71,7 +75,7 @@ func (l *Layout) Ensure() error {
 	if err := l.validateTempLocation(); err != nil {
 		return err
 	}
-	for _, dir := range []string{l.Temp, l.Auth, l.ChromeProfile, l.Cache, l.Logs, l.Tasks, l.Tools} {
+	for _, dir := range []string{l.Temp, l.Auth, l.ChromeProfile, l.BrowserTemp, l.BrowserCache, l.Cache, l.Logs, l.Tasks, l.Tools} {
 		if err := mkdirContained(l.Temp, dir); err != nil {
 			return err
 		}

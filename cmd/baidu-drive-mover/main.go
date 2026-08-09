@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"flag"
 	"fmt"
@@ -9,8 +10,12 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"syscall"
 
+	"github.com/teddyli18000/baidu-drive-mover/internal/app"
+	"github.com/teddyli18000/baidu-drive-mover/internal/baidu"
+	"github.com/teddyli18000/baidu-drive-mover/internal/browserauth"
 	"github.com/teddyli18000/baidu-drive-mover/internal/logsafe"
 	runtimepath "github.com/teddyli18000/baidu-drive-mover/internal/runtime"
 	"github.com/teddyli18000/baidu-drive-mover/internal/state"
@@ -18,10 +23,10 @@ import (
 )
 
 func main() {
-	os.Exit(run(os.Args[1:], os.Stdout, os.Stderr))
+	os.Exit(run(os.Args[1:], os.Stdin, os.Stdout, os.Stderr))
 }
 
-func run(args []string, stdout, stderr io.Writer) int {
+func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("BaiduDriveMover", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	showVersion := fs.Bool("version", false, "print version")
@@ -32,6 +37,10 @@ func run(args []string, stdout, stderr io.Writer) int {
 	if *showVersion {
 		fmt.Fprintf(stdout, "BaiduDriveMover %s (commit %s, built %s)\n", version.Version, version.Commit, version.BuildDate)
 		return 0
+	}
+	if fs.NArg() != 0 {
+		fmt.Fprintln(stderr, "请直接启动程序后粘贴分享链接，不要把链接放在命令行参数里。")
+		return 2
 	}
 
 	layout, err := runtimepath.FromExecutable()
@@ -74,7 +83,50 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return 0
 	}
 
-	fmt.Fprintln(stdout, "Foundation initialized successfully.")
-	fmt.Fprintln(stdout, "Baidu/Google Drive service integration will be enabled in later milestones.")
+	reader := bufio.NewReader(stdin)
+	fmt.Fprint(stdout, "请粘贴百度网盘分享链接: ")
+	line, readErr := reader.ReadString('\n')
+	if readErr != nil && line == "" {
+		fmt.Fprintf(stderr, "读取分享链接失败: %v\n", readErr)
+		return 1
+	}
+	rawLink := strings.TrimSpace(line)
+	cookiePath, err := layout.JoinTemp("auth", "baidu.cookies")
+	if err != nil {
+		logger.Error("cannot create Baidu cookie path", "error", err)
+		return 1
+	}
+	runner := &app.ScanRunner{
+		Layout:      layout,
+		Store:       store,
+		Browser:     browserauth.NewChromeBaiduLogin(layout),
+		Input:       reader,
+		Output:      stdout,
+		Logger:      logger,
+		CookieStore: baidu.CookieStore{Path: cookiePath},
+		NewClient: func(cookieHeader string) (app.BaiduAPI, error) {
+			return baidu.NewClient(cookieHeader)
+		},
+	}
+	taskID, stats, err := runner.Run(ctx, rawLink)
+	if err != nil {
+		logger.Error("Baidu share scan failed", "error", err)
+		return 1
+	}
+	fmt.Fprintf(stdout, "扫描完成：%d 个文件夹，%d 个文件，共 %s。\n", stats.Directories, stats.Files, formatBytes(stats.Bytes))
+	fmt.Fprintf(stdout, "任务 %s 的目录清单已保存；当前版本不会执行转存或删除。\n", taskID)
 	return 0
+}
+
+func formatBytes(bytes int64) string {
+	const unit = int64(1024)
+	if bytes < unit {
+		return fmt.Sprintf("%d B", bytes)
+	}
+	div, exp := unit, 0
+	for n := bytes / unit; n >= unit && exp < 5; n /= unit {
+		div *= unit
+		exp++
+	}
+	return fmt.Sprintf("%.1f %ciB", float64(bytes)/float64(div), "KMGTPE"[exp])
 }

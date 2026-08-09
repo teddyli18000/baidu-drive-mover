@@ -28,9 +28,11 @@ Normal use should be:
 
 ## Development status
 
-Current milestone: **v0.1.0 Foundation**.
+Current milestone: **v0.2.0 Read-only Baidu**.
 
-Design is frozen before service integration. See:
+This milestone adds share-link parsing, dedicated Chrome authentication, recursive paginated share scanning, and durable manifest persistence. It intentionally performs **no Baidu transfer/delete and no Google Drive write** yet.
+
+Design and release gates:
 
 - `docs/ARCHITECTURE.md`
 - `docs/IMPLEMENTATION_PLAN.md`
