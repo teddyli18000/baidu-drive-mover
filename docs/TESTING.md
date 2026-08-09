@@ -41,6 +41,9 @@ Baidu fixtures must cover:
 - partial transfer failures
 - duplicate-name response
 - authentication expiration
+- staging-only delete path validation
+- explicit already-missing cleanup codes
+- task-root listing before final cleanup
 
 Drive fixtures must cover:
 
@@ -63,9 +66,13 @@ Important cut points:
 - after local download before DB transition
 - mid-Drive upload
 - after Drive upload before verification
-- after verification before local cleanup
-- after local cleanup before Baidu cleanup
-- during Baidu cleanup
+- after verification before cleanup authorization
+- after cleanup authorization before any deletion
+- after one local cache deletion
+- after all local cache deletions before Baidu deletion
+- after Baidu deletion before its cleanup evidence is persisted
+- after every cleanup object is reconciled before the batch completion transaction
+- before/after task-root cleanup
 
 ### 4. Filesystem safety tests
 
@@ -100,7 +107,9 @@ Assertions:
 - no file is cleaned before verification;
 - bounded cache limits are respected;
 - task eventually converges when injected failures stop;
-- retries do not create duplicate logical completions.
+- retries do not create duplicate logical completions;
+- a no-progress durable pass stops instead of spinning indefinitely;
+- one failing stage prevents later stages in the same pass from running.
 
 ### 6. Windows CI
 
@@ -112,10 +121,9 @@ At minimum:
 - formatting check
 - static analysis (`go vet`)
 - unit/contract tests
-- race-sensitive tests where supported/appropriate
 - path-safety tests on Windows semantics
 
-A lightweight Linux job may be used for fast generic Go checks, but it never replaces Windows validation.
+Linux CI runs formatting plus the Go race detector for generic race-sensitive coverage. It complements rather than replaces Windows validation.
 
 ### 7. Packaging smoke test
 
@@ -127,7 +135,34 @@ For release candidates:
 - verify no AppData/registry/scheduled-task behavior is introduced;
 - run fake end-to-end task with bundled/package layout.
 
-### 8. Live acceptance tests
+### 8. v0.6 destructive fault-injection gate
+
+Automatic cleanup is not accepted merely because the happy path works. Credential-free tests must inject failures around destructive boundaries and prove restart behavior.
+
+Required assertions include:
+
+- migration from v0.5 never grants cleanup authority;
+- one unverified file blocks the whole staging batch from cleanup authorization;
+- a missing Drive ID blocks cleanup authorization;
+- changed/unregistered local or Baidu paths are rejected before deletion;
+- cleanup authorization is committed before any destructive action starts;
+- cancellation immediately after authorization starts no deletion;
+- cancellation after one local deletion stops before later destructive work and restart completes exactly;
+- an already-missing authorized local file reconciles successfully;
+- Baidu explicit not-found codes reconcile successfully, while other delete failures remain failures;
+- a successful Baidu delete followed by a DB persistence failure resumes safely;
+- a batch-completion transaction failure resumes without re-deleting already-cleaned objects;
+- `CompleteBatchCleanup` independently checks provenance cardinality in its own transaction;
+- the task-level Baidu root cannot be authorized unless every batch has one cleaned provenance row;
+- the task root is never deleted if a fresh listing shows any unexpected object;
+- an already-missing task root can be reconciled without an extra delete;
+- Drive destination objects never become cleanup-authorized;
+- `/BaiduDriveMover` and the Baidu recycle bin have no automatic delete/clear path;
+- scheduler failures at cleanup/Drive/download/staging stop later stages;
+- Ctrl+C pauses rather than converting interrupted work into success;
+- permanent file failure prevents task completion.
+
+### 9. Live acceptance tests
 
 Live tests are separate from normal CI and use the user's real environment only when needed.
 
@@ -138,8 +173,10 @@ Progression:
 3. tiny download;
 4. tiny Drive upload + verification;
 5. intentional restart during each stage;
-6. medium task;
-7. large real migration.
+6. controlled cleanup of only the tool-owned tiny staging batch;
+7. verify the task root is removed only when empty;
+8. medium task;
+9. large real migration.
 
 Never jump directly from mocks to destructive/large live tests.
 
