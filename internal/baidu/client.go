@@ -50,8 +50,8 @@ func WithSleep(fn func(context.Context, time.Duration) error) ClientOption {
 
 func NewClient(cookieHeader string, opts ...ClientOption) (*Client, error) {
 	options := clientOptions{
-		baseURL: defaultBaseURL,
-		now:     time.Now,
+		baseURL:        defaultBaseURL,
+		now:            time.Now,
 		maxListRetries: 4,
 		sleep: func(ctx context.Context, d time.Duration) error {
 			timer := time.NewTimer(d)
