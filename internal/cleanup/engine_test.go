@@ -14,11 +14,13 @@ import (
 )
 
 type fakeCleanupRemote struct {
-	deleteCalls []string
-	listCalls   []string
-	deleteErr   error
-	listErr     error
-	listItems   []baidu.RemoteFile
+	deleteCalls     []string
+	listCalls       []string
+	deleteErr       error
+	listErr         error
+	listItems       []baidu.RemoteFile
+	listErrByPath   map[string]error
+	listItemsByPath map[string][]baidu.RemoteFile
 }
 
 func (r *fakeCleanupRemote) DeleteStagingPath(_ context.Context, remotePath string) error {
@@ -28,6 +30,12 @@ func (r *fakeCleanupRemote) DeleteStagingPath(_ context.Context, remotePath stri
 
 func (r *fakeCleanupRemote) ListStagingPathForCleanup(_ context.Context, remotePath string) ([]baidu.RemoteFile, error) {
 	r.listCalls = append(r.listCalls, remotePath)
+	if err, ok := r.listErrByPath[remotePath]; ok {
+		return nil, err
+	}
+	if items, ok := r.listItemsByPath[remotePath]; ok {
+		return append([]baidu.RemoteFile(nil), items...), nil
+	}
 	return append([]baidu.RemoteFile(nil), r.listItems...), r.listErr
 }
 
@@ -52,8 +60,14 @@ func TestCleanupEngineRemovesOnlyAuthorizedBatchAndEmptyTaskRoot(t *testing.T) {
 			t.Fatalf("delete[%d]=%q want=%q", i, remote.deleteCalls[i], wantDeletes[i])
 		}
 	}
-	if len(remote.listCalls) != 1 || remote.listCalls[0] != taskRoot {
-		t.Fatalf("task root was not inspected exactly once: %v", remote.listCalls)
+	wantLists := []string{batch.BaiduStagingPath, taskRoot}
+	if len(remote.listCalls) != len(wantLists) {
+		t.Fatalf("unexpected cleanup inspections: %v", remote.listCalls)
+	}
+	for i := range wantLists {
+		if remote.listCalls[i] != wantLists[i] {
+			t.Fatalf("list[%d]=%q want=%q", i, remote.listCalls[i], wantLists[i])
+		}
 	}
 	for _, fileID := range []string{"101", "102"} {
 		rel := path.Join("cache", batch.TaskID, fileID+".bin")
@@ -81,6 +95,36 @@ func TestCleanupEngineRemovesOnlyAuthorizedBatchAndEmptyTaskRoot(t *testing.T) {
 	}
 	if reserved != 0 {
 		t.Fatalf("reserved cache bytes=%d want=0", reserved)
+	}
+}
+
+func TestCleanupEngineRefusesBatchContainingUnknownObject(t *testing.T) {
+	layout, store, batch := newCleanupEngineFixture(t, "task-unknown-batch")
+	remote := &fakeCleanupRemote{listItemsByPath: map[string][]baidu.RemoteFile{
+		batch.BaiduStagingPath: {{
+			Name:  "unknown.bin",
+			Path:  batch.BaiduStagingPath + "/unknown.bin",
+			Size:  9,
+			IsDir: false,
+		}},
+	}}
+	engine := &Engine{Layout: layout, Repository: store, Remote: remote}
+	if _, err := engine.Run(context.Background(), batch.TaskID); err == nil {
+		t.Fatal("expected unknown batch object to block directory deletion")
+	}
+	for _, deleted := range remote.deleteCalls {
+		if deleted == batch.BaiduStagingPath {
+			t.Fatalf("batch containing unknown object was deleted: %v", remote.deleteCalls)
+		}
+	}
+	for _, fileID := range []string{"101", "102"} {
+		file, err := store.GetFile(context.Background(), batch.TaskID, fileID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if file.Status != state.FileCleanupPending {
+			t.Fatalf("file %s status=%s want CLEANUP_PENDING", fileID, file.Status)
+		}
 	}
 }
 
@@ -134,12 +178,14 @@ func TestCleanupEngineRestartsAfterLocalDeletionAndBaiduFailure(t *testing.T) {
 
 func TestCleanupEngineRefusesTaskRootContainingUnknownObject(t *testing.T) {
 	layout, store, batch := newCleanupEngineFixture(t, "task-unknown-root")
-	remote := &fakeCleanupRemote{listItems: []baidu.RemoteFile{{Name: "unknown", Path: "/BaiduDriveMover/task-unknown-root/unknown", IsDir: true}}}
+	taskRoot := "/BaiduDriveMover/" + batch.TaskID
+	remote := &fakeCleanupRemote{listItemsByPath: map[string][]baidu.RemoteFile{
+		taskRoot: {{Name: "unknown", Path: taskRoot + "/unknown", IsDir: true}},
+	}}
 	engine := &Engine{Layout: layout, Repository: store, Remote: remote}
 	if _, err := engine.Run(context.Background(), batch.TaskID); err == nil {
 		t.Fatal("expected non-empty task root to block deletion")
 	}
-	taskRoot := "/BaiduDriveMover/" + batch.TaskID
 	for _, deleted := range remote.deleteCalls {
 		if deleted == taskRoot {
 			t.Fatalf("non-empty task root was deleted: %v", remote.deleteCalls)
@@ -156,7 +202,8 @@ func TestCleanupEngineRefusesTaskRootContainingUnknownObject(t *testing.T) {
 
 func TestCleanupEngineReconcilesAlreadyMissingTaskRoot(t *testing.T) {
 	layout, store, batch := newCleanupEngineFixture(t, "task-missing-root")
-	remote := &fakeCleanupRemote{listErr: baidu.ErrStagingNotFound}
+	taskRoot := "/BaiduDriveMover/" + batch.TaskID
+	remote := &fakeCleanupRemote{listErrByPath: map[string]error{taskRoot: baidu.ErrStagingNotFound}}
 	engine := &Engine{Layout: layout, Repository: store, Remote: remote}
 	summary, err := engine.Run(context.Background(), batch.TaskID)
 	if err != nil {
@@ -165,7 +212,6 @@ func TestCleanupEngineReconcilesAlreadyMissingTaskRoot(t *testing.T) {
 	if !summary.TaskRootDone {
 		t.Fatal("already-missing task root was not reconciled")
 	}
-	taskRoot := "/BaiduDriveMover/" + batch.TaskID
 	for _, deleted := range remote.deleteCalls {
 		if deleted == taskRoot {
 			t.Fatalf("already-missing task root should not require delete: %v", remote.deleteCalls)
