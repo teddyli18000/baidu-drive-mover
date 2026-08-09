@@ -103,10 +103,13 @@ func TestPipelinePermanentFailureStopsBeforeAnyStage(t *testing.T) {
 	runner := &PipelineRunner{
 		State:         st,
 		MaxCacheBytes: 100,
-		Cleanup:       func(context.Context, string) (cleanupengine.Summary, error) { calls++; return cleanupengine.Summary{}, nil },
-		Drive:         func(context.Context, string) (DriveSummary, error) { calls++; return DriveSummary{}, nil },
-		Download:      func(context.Context, string) (download.Summary, error) { calls++; return download.Summary{}, nil },
-		Stage:         func(context.Context, string, int64) (StageSummary, error) { calls++; return StageSummary{}, nil },
+		Cleanup: func(context.Context, string) (cleanupengine.Summary, error) {
+			calls++
+			return cleanupengine.Summary{}, nil
+		},
+		Drive:    func(context.Context, string) (DriveSummary, error) { calls++; return DriveSummary{}, nil },
+		Download: func(context.Context, string) (download.Summary, error) { calls++; return download.Summary{}, nil },
+		Stage:    func(context.Context, string, int64) (StageSummary, error) { calls++; return StageSummary{}, nil },
 	}
 	_, err := runner.Run(context.Background(), "task")
 	if !errors.Is(err, ErrPipelinePermanentFailed) {

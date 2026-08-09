@@ -39,15 +39,15 @@ type PipelineRunner struct {
 }
 
 type PipelineSummary struct {
-	Passes        int
+	Passes         int
 	BatchesCleaned int
-	FilesDone     int
-	BytesFreed    int64
-	FilesVerified int
-	BytesVerified int64
-	FilesReady    int
-	BytesReady    int64
-	Final         state.PipelineProgress
+	FilesDone      int
+	BytesFreed     int64
+	FilesVerified  int
+	BytesVerified  int64
+	FilesReady     int
+	BytesReady     int64
+	Final          state.PipelineProgress
 }
 
 func (r *PipelineRunner) Run(ctx context.Context, taskID string) (PipelineSummary, error) {

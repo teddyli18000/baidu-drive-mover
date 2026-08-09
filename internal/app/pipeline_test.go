@@ -31,7 +31,7 @@ func TestPipelineProgressesInBoundedStageDownloadDriveCleanupPasses(t *testing.T
 	st := &fakePipelineState{progress: state.PipelineProgress{Total: 1, Planned: 1}}
 	var calls []string
 	runner := &PipelineRunner{
-		State: st,
+		State:         st,
 		MaxCacheBytes: 100,
 		Cleanup: func(context.Context, string) (cleanupengine.Summary, error) {
 			calls = append(calls, "cleanup")
@@ -81,7 +81,7 @@ func TestPipelinePrioritizesCleanupToReleaseWatermark(t *testing.T) {
 	st := &fakePipelineState{progress: state.PipelineProgress{Total: 2, DriveVerified: 2, ReservedCache: 80, DriveRootReady: true}}
 	var calls []string
 	runner := &PipelineRunner{
-		State: st,
+		State:         st,
 		MaxCacheBytes: 100,
 		Cleanup: func(context.Context, string) (cleanupengine.Summary, error) {
 			calls = append(calls, "cleanup")
@@ -115,16 +115,16 @@ func TestPipelineEmptyShareStillInitializesDriveRoot(t *testing.T) {
 	st := &fakePipelineState{}
 	var calls []string
 	runner := &PipelineRunner{
-		State: st,
+		State:         st,
 		MaxCacheBytes: 100,
-		Cleanup: func(context.Context, string) (cleanupengine.Summary, error) { return cleanupengine.Summary{}, nil },
+		Cleanup:       func(context.Context, string) (cleanupengine.Summary, error) { return cleanupengine.Summary{}, nil },
 		Drive: func(context.Context, string) (DriveSummary, error) {
 			calls = append(calls, "drive")
 			st.progress.DriveRootReady = true
 			return DriveSummary{RootID: "empty-root"}, nil
 		},
 		Download: func(context.Context, string) (download.Summary, error) { return download.Summary{}, nil },
-		Stage: func(context.Context, string, int64) (StageSummary, error) { return StageSummary{}, nil },
+		Stage:    func(context.Context, string, int64) (StageSummary, error) { return StageSummary{}, nil },
 	}
 	if _, err := runner.Run(context.Background(), "empty"); err != nil {
 		t.Fatal(err)
@@ -137,12 +137,12 @@ func TestPipelineEmptyShareStillInitializesDriveRoot(t *testing.T) {
 func TestPipelineStopsWhenDurableStateDoesNotChange(t *testing.T) {
 	st := &fakePipelineState{progress: state.PipelineProgress{Total: 1, Planned: 1}}
 	runner := &PipelineRunner{
-		State: st,
+		State:         st,
 		MaxCacheBytes: 100,
-		Cleanup: func(context.Context, string) (cleanupengine.Summary, error) { return cleanupengine.Summary{}, nil },
-		Drive: func(context.Context, string) (DriveSummary, error) { return DriveSummary{}, nil },
-		Download: func(context.Context, string) (download.Summary, error) { return download.Summary{}, nil },
-		Stage: func(context.Context, string, int64) (StageSummary, error) { return StageSummary{}, nil },
+		Cleanup:       func(context.Context, string) (cleanupengine.Summary, error) { return cleanupengine.Summary{}, nil },
+		Drive:         func(context.Context, string) (DriveSummary, error) { return DriveSummary{}, nil },
+		Download:      func(context.Context, string) (download.Summary, error) { return download.Summary{}, nil },
+		Stage:         func(context.Context, string, int64) (StageSummary, error) { return StageSummary{}, nil },
 	}
 	_, err := runner.Run(context.Background(), "stuck")
 	if !errors.Is(err, ErrPipelineNoProgress) {
@@ -157,12 +157,15 @@ func TestPipelineCancellationPausesWithoutRunningStages(t *testing.T) {
 	st := &fakePipelineState{progress: state.PipelineProgress{Total: 1, Planned: 1}}
 	calls := 0
 	runner := &PipelineRunner{
-		State: st,
+		State:         st,
 		MaxCacheBytes: 100,
-		Cleanup: func(context.Context, string) (cleanupengine.Summary, error) { calls++; return cleanupengine.Summary{}, nil },
-		Drive: func(context.Context, string) (DriveSummary, error) { calls++; return DriveSummary{}, nil },
+		Cleanup: func(context.Context, string) (cleanupengine.Summary, error) {
+			calls++
+			return cleanupengine.Summary{}, nil
+		},
+		Drive:    func(context.Context, string) (DriveSummary, error) { calls++; return DriveSummary{}, nil },
 		Download: func(context.Context, string) (download.Summary, error) { calls++; return download.Summary{}, nil },
-		Stage: func(context.Context, string, int64) (StageSummary, error) { calls++; return StageSummary{}, nil },
+		Stage:    func(context.Context, string, int64) (StageSummary, error) { calls++; return StageSummary{}, nil },
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
