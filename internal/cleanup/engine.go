@@ -17,6 +17,7 @@ type Repository interface {
 	MarkBaiduBatchCleanupDone(ctx context.Context, taskID, batchID string) error
 	RecordLocalCacheCleanupFailure(ctx context.Context, taskID, fileID, message string) error
 	RecordBaiduBatchCleanupFailure(ctx context.Context, taskID, batchID, message string) error
+	ValidateBatchCleanupCompleteness(ctx context.Context, taskID, batchID string) error
 	CompleteBatchCleanup(ctx context.Context, taskID, batchID string) error
 	TaskRootCleanupCandidate(ctx context.Context, taskID string) (bool, error)
 	AuthorizeTaskRootCleanup(ctx context.Context, taskID string) (state.CleanupObject, error)
@@ -69,6 +70,9 @@ func (e *Engine) Run(ctx context.Context, taskID string) (Summary, error) {
 		}
 		if err := e.cleanupBatch(ctx, batch); err != nil {
 			return summary, err
+		}
+		if err := e.Repository.ValidateBatchCleanupCompleteness(ctx, taskID, batch.BatchID); err != nil {
+			return summary, fmt.Errorf("validate cleanup batch %q: %w", batch.BatchID, err)
 		}
 		if err := e.Repository.CompleteBatchCleanup(ctx, taskID, batch.BatchID); err != nil {
 			return summary, fmt.Errorf("complete cleanup batch %q: %w", batch.BatchID, err)
