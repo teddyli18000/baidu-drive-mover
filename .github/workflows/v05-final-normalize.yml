@@ -1,0 +1,41 @@
+name: v0.5 Final Normalize
+
+on:
+  push:
+    branches: [dev/v0.5-google-drive]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  normalize:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: dev/v0.5-google-drive
+      - uses: actions/setup-go@v7
+        with:
+          go-version: '1.26.5'
+          cache: true
+      - name: Normalize and validate
+        run: |
+          set -euo pipefail
+          gofmt -w ./cmd ./internal
+          go mod tidy
+          go test ./... -count=1
+          go vet ./...
+      - name: Commit normalization
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add go.mod go.sum cmd internal
+          if git diff --cached --quiet; then
+            echo 'Nothing to normalize.'
+            exit 0
+          fi
+          git commit -m 'chore: normalize final v0.5 sources'
+          git push origin HEAD:dev/v0.5-google-drive
