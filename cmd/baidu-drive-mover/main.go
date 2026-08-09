@@ -16,6 +16,7 @@ import (
 	"github.com/teddyli18000/baidu-drive-mover/internal/app"
 	"github.com/teddyli18000/baidu-drive-mover/internal/baidu"
 	"github.com/teddyli18000/baidu-drive-mover/internal/browserauth"
+	downloadengine "github.com/teddyli18000/baidu-drive-mover/internal/download"
 	"github.com/teddyli18000/baidu-drive-mover/internal/logsafe"
 	runtimepath "github.com/teddyli18000/baidu-drive-mover/internal/runtime"
 	"github.com/teddyli18000/baidu-drive-mover/internal/state"
@@ -117,26 +118,65 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		return 1
 	}
 	fmt.Fprintf(stdout, "扫描完成：%d 个文件夹，%d 个文件，共 %s。\n", stats.Directories, stats.Files, formatBytes(stats.Bytes))
-	fmt.Fprintln(stdout, "开始按安全批次转存到百度网盘临时区……")
 
+	const maxCacheBytes = downloadengine.DefaultMaxCacheBytes
+	reserved, err := store.ReservedCacheBytes(ctx)
+	if err != nil {
+		logger.Error("cannot calculate local cache reservation", "task_id", taskID, "error", err)
+		return 1
+	}
+	available := maxCacheBytes - reserved
+	if available <= 0 {
+		_ = store.UpdateTaskStatus(context.Background(), taskID, state.TaskBlocked, "local cache watermark is fully reserved")
+		fmt.Fprintf(stdout, "本地缓存已达到 %s 水位，任务 %s 已安全保留，未继续转存。\n", formatBytes(maxCacheBytes), taskID)
+		return 0
+	}
+
+	fmt.Fprintf(stdout, "开始转存一个受控批次（当前最多允许 %s）……\n", formatBytes(available))
 	stageRunner := &app.StageRunner{
-		Store:       store,
-		Browser:     browser,
-		Output:      stdout,
-		Logger:      logger,
-		CookieStore: cookieStore,
+		Store:         store,
+		Browser:       browser,
+		Output:        stdout,
+		Logger:        logger,
+		CookieStore:   cookieStore,
+		MaxBatches:    1,
+		MaxBatchBytes: available,
 		NewClient: func(cookieHeader string) (app.StagingBaiduAPI, error) {
 			return baidu.NewClient(cookieHeader)
 		},
 	}
 	stageSummary, err := stageRunner.Run(ctx, taskID)
 	if err != nil {
-		logger.Error("Baidu staging failed", "task_id", taskID, "error", err)
-		fmt.Fprintf(stderr, "任务 %s 已保留断点；后续版本会提供完整自动恢复入口。\n", taskID)
+		logger.Error("bounded Baidu staging failed", "task_id", taskID, "error", err)
+		fmt.Fprintf(stderr, "任务 %s 已保留断点；没有自动清理任何百度文件。\n", taskID)
 		return 1
 	}
-	fmt.Fprintf(stdout, "百度暂存完成：%d 个文件已核对。\n", stageSummary.FilesStaged)
-	fmt.Fprintf(stdout, "任务 %s 已保留。当前 v0.3 不会下载、上传 Drive 或清理百度暂存文件。\n", taskID)
+	fmt.Fprintf(stdout, "百度暂存通过核对：当前累计 %d 个文件。\n", stageSummary.FilesStaged)
+
+	fmt.Fprintln(stdout, "开始下载到 ./temp/cache/，支持断点续传和重启恢复……")
+	downloadRunner := &app.DownloadRunner{
+		Layout:        layout,
+		Store:         store,
+		Browser:       browser,
+		Output:        stdout,
+		Logger:        logger,
+		CookieStore:   cookieStore,
+		MaxCacheBytes: maxCacheBytes,
+		NewClient: func(cookieHeader string) (app.DownloadBaiduAPI, error) {
+			return baidu.NewClient(cookieHeader)
+		},
+	}
+	downloadSummary, err := downloadRunner.Run(ctx, taskID)
+	if err != nil {
+		logger.Error("Baidu download pass failed", "task_id", taskID, "error", err)
+		fmt.Fprintf(stderr, "任务 %s 已保留下载断点；下次恢复会重新校验已有缓存。\n", taskID)
+		return 1
+	}
+	fmt.Fprintf(stdout, "本轮下载完成：%d 个文件，%s 已通过本地校验。\n", downloadSummary.FilesReady, formatBytes(downloadSummary.BytesReady))
+	if downloadSummary.PausedByWatermark {
+		fmt.Fprintf(stdout, "已达到 %s 本地缓存水位，任务安全暂停。\n", formatBytes(maxCacheBytes))
+	}
+	fmt.Fprintf(stdout, "任务 %s 已保留。当前 v0.4 不上传 Google Drive，也不会自动删除百度暂存或本地缓存。\n", taskID)
 	return 0
 }
 
