@@ -24,14 +24,14 @@ type DriveClientFactory func(layout *runtimepath.Layout, runner rclone.Runner) (
 type DriveProvisioner func(ctx context.Context, layout *runtimepath.Layout, runner rclone.Runner, client rclone.HTTPDoer) error
 
 type DriveRunner struct {
-	Layout      *runtimepath.Layout
-	Store       *state.Store
-	Output      io.Writer
-	Logger      *slog.Logger
-	Process     rclone.Runner
-	HTTPClient  rclone.HTTPDoer
-	Provision   DriveProvisioner
-	NewClient   DriveClientFactory
+	Layout     *runtimepath.Layout
+	Store      *state.Store
+	Output     io.Writer
+	Logger     *slog.Logger
+	Process    rclone.Runner
+	HTTPClient rclone.HTTPDoer
+	Provision  DriveProvisioner
+	NewClient  DriveClientFactory
 }
 
 type DriveSummary struct {

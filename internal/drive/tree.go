@@ -29,11 +29,11 @@ type TreeBuilder struct {
 }
 
 type remoteItem struct {
-	ID    string `json:"ID"`
-	Name  string `json:"Name"`
-	Path  string `json:"Path"`
-	IsDir bool   `json:"IsDir"`
-	Size  int64  `json:"Size"`
+	ID     string            `json:"ID"`
+	Name   string            `json:"Name"`
+	Path   string            `json:"Path"`
+	IsDir  bool              `json:"IsDir"`
+	Size   int64             `json:"Size"`
 	Hashes map[string]string `json:"Hashes"`
 }
 
