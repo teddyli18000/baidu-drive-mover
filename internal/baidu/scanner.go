@@ -2,6 +2,8 @@ package baidu
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/binary"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -14,7 +16,10 @@ import (
 	"github.com/teddyli18000/baidu-drive-mover/internal/manifest"
 )
 
-const shareListPageSize = 100
+const (
+	shareListPageSize         = 100
+	maxSharePagesPerDirectory = 100000
+)
 
 type shareListItem struct {
 	FsID           int64  `json:"fs_id"`
@@ -52,26 +57,54 @@ func (c *Client) Scan(ctx context.Context, taskID string, link ShareLink, share 
 			continue
 		}
 		visited[current] = true
+		seenPages := make(map[[32]byte]int)
 
 		for pageNumber := 1; ; pageNumber++ {
+			if pageNumber > maxSharePagesPerDirectory {
+				return fmt.Errorf("share directory %q exceeded pagination safety ceiling", current)
+			}
 			items, err := c.listSharePage(ctx, link, share, current, pageNumber)
 			if err != nil {
 				return err
 			}
+			fingerprint := sharePageFingerprint(items)
+			if previous, exists := seenPages[fingerprint]; exists {
+				return fmt.Errorf("share directory %q pagination made no progress: page %d repeats page %d", current, pageNumber, previous)
+			}
+			seenPages[fingerprint] = pageNumber
+
 			directories := make([]manifest.Directory, 0)
 			files := make([]manifest.File, 0)
+			pagePaths := make(map[string]string, len(items))
 			for _, item := range items {
-				fullPath := normalizeRemotePath(item.Path)
-				if item.Path == "" {
-					fullPath = normalizeRemotePath(path.Join(current, item.ServerFilename))
+				name, err := safeShareEntryName(item.ServerFilename)
+				if err != nil {
+					return err
+				}
+				expectedFullPath := normalizeRemotePath(path.Join(current, name))
+				fullPath := expectedFullPath
+				if strings.TrimSpace(item.Path) != "" {
+					fullPath = normalizeRemotePath(item.Path)
+					if fullPath != expectedFullPath {
+						return fmt.Errorf("Baidu returned child path %q for %q outside expected parent %q", fullPath, name, current)
+					}
 				}
 				logicalPath, err := relativeLogicalPath(start, fullPath)
 				if err != nil {
 					return fmt.Errorf("Baidu returned path outside selected share root: %w", err)
 				}
+				kind := "file"
+				if item.IsDir == 1 {
+					kind = "directory"
+				}
+				if previousKind, exists := pagePaths[logicalPath]; exists {
+					return fmt.Errorf("Baidu page contains duplicate logical path %q (%s and %s)", logicalPath, previousKind, kind)
+				}
+				pagePaths[logicalPath] = kind
+
 				if item.IsDir == 1 {
 					if fullPath == current {
-						continue
+						return fmt.Errorf("Baidu directory %q resolved to its own parent", name)
 					}
 					if logicalPath != "/" {
 						directories = append(directories, manifest.Directory{LogicalPath: logicalPath})
@@ -82,8 +115,8 @@ func (c *Client) Scan(ctx context.Context, taskID string, link ShareLink, share 
 					}
 					continue
 				}
-				if item.FsID == 0 {
-					return fmt.Errorf("Baidu returned file without fs_id at %q", logicalPath)
+				if item.FsID <= 0 {
+					return fmt.Errorf("Baidu returned file without valid fs_id at %q", logicalPath)
 				}
 				if item.Size < 0 {
 					return fmt.Errorf("Baidu returned negative file size at %q", logicalPath)
@@ -96,7 +129,7 @@ func (c *Client) Scan(ctx context.Context, taskID string, link ShareLink, share 
 					SourceID:    strconv.FormatInt(item.FsID, 10),
 					LogicalPath: logicalPath,
 					ParentPath:  parent,
-					Name:        path.Base(logicalPath),
+					Name:        name,
 					Size:        item.Size,
 					MD5:         strings.TrimSpace(item.MD5),
 				})
@@ -130,7 +163,7 @@ func (c *Client) listSharePage(ctx context.Context, link ShareLink, share ShareC
 		query.Set("page", strconv.Itoa(pageNumber))
 		query.Set("num", strconv.Itoa(shareListPageSize))
 		form := url.Values{"dir": []string{directory}}
-		body, status, err := c.do(ctx, http.MethodPost, "/share/list", query, form, link.SanitizedURL(), 8<<20)
+		body, status, err := c.doRead(ctx, http.MethodPost, "/share/list", query, form, link.SanitizedURL(), 8<<20)
 		if err != nil {
 			return nil, err
 		}
@@ -164,6 +197,37 @@ func (c *Client) listSharePage(ctx context.Context, link ShareLink, share ShareC
 		}
 	}
 	return nil, fmt.Errorf("Baidu share listing retry loop exhausted")
+}
+
+func safeShareEntryName(raw string) (string, error) {
+	name := strings.TrimSpace(raw)
+	if name == "" || name == "." || name == ".." {
+		return "", fmt.Errorf("Baidu returned unsafe empty/dot filename %q", raw)
+	}
+	if strings.ContainsRune(name, '\x00') || strings.ContainsAny(name, "/\\") {
+		return "", fmt.Errorf("Baidu returned unsafe path separator in filename %q", raw)
+	}
+	return name, nil
+}
+
+func sharePageFingerprint(items []shareListItem) [32]byte {
+	hash := sha256.New()
+	var buffer [8]byte
+	for _, item := range items {
+		binary.LittleEndian.PutUint64(buffer[:], uint64(item.FsID))
+		_, _ = hash.Write(buffer[:])
+		binary.LittleEndian.PutUint64(buffer[:], uint64(item.Size))
+		_, _ = hash.Write(buffer[:])
+		_, _ = hash.Write([]byte{byte(item.IsDir)})
+		for _, value := range []string{item.ServerFilename, item.Path, strings.TrimSpace(item.MD5)} {
+			binary.LittleEndian.PutUint64(buffer[:], uint64(len(value)))
+			_, _ = hash.Write(buffer[:])
+			_, _ = hash.Write([]byte(value))
+		}
+	}
+	var fingerprint [32]byte
+	copy(fingerprint[:], hash.Sum(nil))
+	return fingerprint
 }
 
 func relativeLogicalPath(start, full string) (string, error) {
