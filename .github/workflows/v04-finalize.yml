@@ -1,0 +1,347 @@
+name: v0.4 Finalize
+
+on:
+  push:
+    branches: [dev/v0.4-downloader]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  finalize:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: dev/v0.4-downloader
+      - uses: actions/setup-go@v7
+        with:
+          go-version: '1.26.5'
+          cache: true
+      - name: Wire bounded stage/download pass
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          p = Path('internal/app/stage.go')
+          s = p.read_text()
+          s = s.replace(
+              'BatchSize   int\n}',
+              'BatchSize     int\n\tMaxBatches    int\n\tMaxBatchBytes int64\n}',
+          )
+          old = '''\tif _, err := r.Store.PlanBatches(ctx, taskID, batchSize); err != nil {
+          \t\treturn StageSummary{}, err
+          \t}
+          \tif err := r.Store.UpdateTaskStatus(ctx, taskID, state.TaskRunning, ""); err != nil {
+          '''
+          new = '''\tif r.MaxBatchBytes > 0 {
+          \t\tif _, err := r.Store.PlanBatchesBounded(ctx, taskID, batchSize, r.MaxBatchBytes); err != nil {
+          \t\t\treturn StageSummary{}, err
+          \t\t}
+          \t} else {
+          \t\tif _, err := r.Store.PlanBatches(ctx, taskID, batchSize); err != nil {
+          \t\t\treturn StageSummary{}, err
+          \t\t}
+          \t}
+          \tif r.MaxBatchBytes > 0 {
+          \t\tbatches, err := r.Store.StagingBatches(ctx, taskID)
+          \t\tif err != nil {
+          \t\t\treturn StageSummary{}, err
+          \t\t}
+          \t\tif len(batches) > 0 && batches[0].TotalBytes > r.MaxBatchBytes {
+          \t\t\tblockErr := &StagingBatchTooLargeError{BatchID: batches[0].BatchID, Bytes: batches[0].TotalBytes, Limit: r.MaxBatchBytes}
+          \t\t\t_ = r.Store.UpdateTaskStatus(context.Background(), taskID, state.TaskBlocked, safeError(blockErr))
+          \t\t\treturn StageSummary{}, blockErr
+          \t\t}
+          \t}
+          \tif err := r.Store.UpdateTaskStatus(ctx, taskID, state.TaskRunning, ""); err != nil {
+          '''
+          if old not in s:
+              raise SystemExit('stage planner anchor not found')
+          s = s.replace(old, new, 1)
+          old = '''\t\texecutor := &staging.Executor{
+          \t\t\tRepository: r.Store,
+          \t\t\tRemote:     api,
+          \t\t\tLink:       link,
+          \t\t\tShare:      share,
+          \t\t}
+          '''
+          new = '''\t\texecutor := &staging.Executor{
+          \t\t\tRepository: r.Store,
+          \t\t\tRemote:     api,
+          \t\t\tLink:       link,
+          \t\t\tShare:      share,
+          \t\t\tMaxBatches: r.MaxBatches,
+          \t\t}
+          '''
+          if old not in s:
+              raise SystemExit('stage executor anchor not found')
+          p.write_text(s.replace(old, new, 1))
+
+          p = Path('internal/download/engine.go')
+          s = p.read_text()
+          old = '''\t\tcopyErr := e.copyStream(ctx, partRelative, file.Size, offset, stream)
+          \t\tif copyErr != nil {
+          \t\t\tlastErr = copyErr
+          '''
+          new = '''\t\tcopyErr := e.copyStream(ctx, partRelative, file.Size, offset, stream)
+          \t\tif copyErr != nil {
+          \t\t\tvar permanentCopy *permanentError
+          \t\t\tif errors.As(copyErr, &permanentCopy) {
+          \t\t\t\treturn false, copyErr
+          \t\t\t}
+          \t\t\tlastErr = copyErr
+          '''
+          if old not in s:
+              raise SystemExit('download copy anchor not found')
+          p.write_text(s.replace(old, new, 1))
+
+          Path('internal/version/version.go').write_text('''package version
+
+          var (
+          \tVersion   = "0.4.0-dev"
+          \tCommit    = "unknown"
+          \tBuildDate = "unknown"
+          )
+          ''')
+
+          Path('cmd/baidu-drive-mover/main.go').write_text(r'''package main
+
+          import (
+          \t"bufio"
+          \t"context"
+          \t"errors"
+          \t"flag"
+          \t"fmt"
+          \t"io"
+          \t"log/slog"
+          \t"os"
+          \t"os/signal"
+          \t"path/filepath"
+          \t"strings"
+          \t"syscall"
+
+          \t"github.com/teddyli18000/baidu-drive-mover/internal/app"
+          \t"github.com/teddyli18000/baidu-drive-mover/internal/baidu"
+          \t"github.com/teddyli18000/baidu-drive-mover/internal/browserauth"
+          \t"github.com/teddyli18000/baidu-drive-mover/internal/download"
+          \t"github.com/teddyli18000/baidu-drive-mover/internal/logsafe"
+          \truntimepath "github.com/teddyli18000/baidu-drive-mover/internal/runtime"
+          \t"github.com/teddyli18000/baidu-drive-mover/internal/state"
+          \t"github.com/teddyli18000/baidu-drive-mover/internal/version"
+          )
+
+          func main() {
+          \tos.Exit(run(os.Args[1:], os.Stdin, os.Stdout, os.Stderr))
+          }
+
+          func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
+          \tfs := flag.NewFlagSet("BaiduDriveMover", flag.ContinueOnError)
+          \tfs.SetOutput(stderr)
+          \tshowVersion := fs.Bool("version", false, "print version")
+          \tcheckOnly := fs.Bool("check", false, "validate local runtime/state setup and exit")
+          \tif err := fs.Parse(args); err != nil {
+          \t\treturn 2
+          \t}
+          \tif *showVersion {
+          \t\tfmt.Fprintf(stdout, "BaiduDriveMover %s (commit %s, built %s)\n", version.Version, version.Commit, version.BuildDate)
+          \t\treturn 0
+          \t}
+          \tif fs.NArg() != 0 {
+          \t\tfmt.Fprintln(stderr, "请直接启动程序后粘贴分享链接，不要把链接放在命令行参数里。")
+          \t\treturn 2
+          \t}
+
+          \tlayout, err := runtimepath.FromExecutable()
+          \tif err != nil {
+          \t\tfmt.Fprintf(stderr, "Startup failed: %v\n", err)
+          \t\treturn 1
+          \t}
+          \tif err := layout.Ensure(); err != nil {
+          \t\tfmt.Fprintf(stderr, "Startup failed: cannot safely initialize ./temp/: %v\n", err)
+          \t\treturn 1
+          \t}
+
+          \tlogPath := filepath.Join(layout.Logs, "baidu-drive-mover.log")
+          \tlogFile, err := os.OpenFile(logPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
+          \tif err != nil {
+          \t\tfmt.Fprintf(stderr, "Startup failed: cannot open log under ./temp/: %v\n", err)
+          \t\treturn 1
+          \t}
+          \tdefer logFile.Close()
+          \tlogger := logsafe.NewLogger(io.MultiWriter(stdout, logFile), slog.LevelInfo)
+
+          \tstore, err := state.Open(layout.StateDB)
+          \tif err != nil {
+          \t\tlogger.Error("state database initialization failed", "error", err)
+          \t\treturn 1
+          \t}
+          \tdefer store.Close()
+
+          \tctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+          \tdefer stop()
+          \tlogger.Info("BaiduDriveMover started", "version", version.Version)
+
+          \tif *checkOnly {
+          \t\tv, err := store.SchemaVersion(ctx)
+          \t\tif err != nil {
+          \t\t\tlogger.Error("state database check failed", "error", err)
+          \t\t\treturn 1
+          \t\t}
+          \t\tlogger.Info("local safety check passed", "schema_version", v, "runtime_root", layout.Temp)
+          \t\treturn 0
+          \t}
+
+          \treader := bufio.NewReader(stdin)
+          \tfmt.Fprint(stdout, "请粘贴百度网盘分享链接: ")
+          \tline, readErr := reader.ReadString('\n')
+          \tif readErr != nil && line == "" {
+          \t\tfmt.Fprintf(stderr, "读取分享链接失败: %v\n", readErr)
+          \t\treturn 1
+          \t}
+          \trawLink := strings.TrimSpace(line)
+          \tcookiePath, err := layout.JoinTemp("auth", "baidu.cookies")
+          \tif err != nil {
+          \t\tlogger.Error("cannot create Baidu cookie path", "error", err)
+          \t\treturn 1
+          \t}
+          \tcookieStore := baidu.CookieStore{Path: cookiePath}
+          \tbrowser := browserauth.NewChromeBaiduLogin(layout)
+
+          \tscanRunner := &app.ScanRunner{
+          \t\tLayout:      layout,
+          \t\tStore:       store,
+          \t\tBrowser:     browser,
+          \t\tInput:       reader,
+          \t\tOutput:      stdout,
+          \t\tLogger:      logger,
+          \t\tCookieStore: cookieStore,
+          \t\tNewClient: func(cookieHeader string) (app.BaiduAPI, error) {
+          \t\t\treturn baidu.NewClient(cookieHeader)
+          \t\t},
+          \t}
+          \ttaskID, stats, err := scanRunner.Run(ctx, rawLink)
+          \tif err != nil {
+          \t\tlogger.Error("Baidu share scan failed", "error", err)
+          \t\treturn 1
+          \t}
+          \tfmt.Fprintf(stdout, "扫描完成：%d 个文件夹，%d 个文件，共 %s。\n", stats.Directories, stats.Files, formatBytes(stats.Bytes))
+
+          \treserved, err := store.ReservedCacheBytes(ctx)
+          \tif err != nil {
+          \t\tlogger.Error("cannot calculate local cache reservation", "error", err)
+          \t\treturn 1
+          \t}
+          \tavailable := download.DefaultMaxCacheBytes - reserved
+          \tif available <= 0 {
+          \t\tfmt.Fprintf(stdout, "本地缓存已达到 %s 水位；任务 %s 已安全暂停。\n", formatBytes(download.DefaultMaxCacheBytes), taskID)
+          \t\treturn 0
+          \t}
+
+          \tfmt.Fprintln(stdout, "开始转存一个受控批次到百度网盘临时区……")
+          \tstageRunner := &app.StageRunner{
+          \t\tStore:         store,
+          \t\tBrowser:       browser,
+          \t\tOutput:        stdout,
+          \t\tLogger:        logger,
+          \t\tCookieStore:   cookieStore,
+          \t\tMaxBatches:    1,
+          \t\tMaxBatchBytes: available,
+          \t\tNewClient: func(cookieHeader string) (app.StagingBaiduAPI, error) {
+          \t\t\treturn baidu.NewClient(cookieHeader)
+          \t\t},
+          \t}
+          \tstageSummary, err := stageRunner.Run(ctx, taskID)
+          \tif err != nil {
+          \t\tvar tooLarge *app.StagingBatchTooLargeError
+          \t\tif errors.As(err, &tooLarge) {
+          \t\t\tfmt.Fprintf(stderr, "首个文件/批次需要 %s，本地可用缓存预算只有 %s；任务已在远程写入前阻塞。\n", formatBytes(tooLarge.Bytes), formatBytes(tooLarge.Limit))
+          \t\t\treturn 1
+          \t\t}
+          \t\tlogger.Error("Baidu staging failed", "task_id", taskID, "error", err)
+          \t\treturn 1
+          \t}
+          \tfmt.Fprintf(stdout, "百度暂存完成：%d 个文件已核对。开始下载到受限本地缓存……\n", stageSummary.FilesStaged)
+
+          \tdownloadRunner := &app.DownloadRunner{
+          \t\tLayout:        layout,
+          \t\tStore:         store,
+          \t\tBrowser:       browser,
+          \t\tOutput:        stdout,
+          \t\tLogger:        logger,
+          \t\tCookieStore:   cookieStore,
+          \t\tMaxCacheBytes: download.DefaultMaxCacheBytes,
+          \t\tNewClient: func(cookieHeader string) (app.DownloadBaiduAPI, error) {
+          \t\t\treturn baidu.NewClient(cookieHeader)
+          \t\t},
+          \t}
+          \tdownloadSummary, err := downloadRunner.Run(ctx, taskID)
+          \tif err != nil {
+          \t\tlogger.Error("bounded Baidu download failed", "task_id", taskID, "error", err)
+          \t\treturn 1
+          \t}
+          \tfmt.Fprintf(stdout, "本轮已下载并校验 %d 个文件（%s）。\n", downloadSummary.FilesReady, formatBytes(downloadSummary.BytesReady))
+          \tif downloadSummary.PausedByWatermark {
+          \t\tfmt.Fprintln(stdout, "本地缓存达到安全水位，本轮已暂停。")
+          \t}
+          \tfmt.Fprintf(stdout, "任务 %s 已保留断点。当前 v0.4 不会上传 Drive，也不会自动删除本地/百度暂存文件。\n", taskID)
+          \treturn 0
+          }
+
+          func formatBytes(bytes int64) string {
+          \tconst unit = int64(1024)
+          \tif bytes < unit {
+          \t\treturn fmt.Sprintf("%d B", bytes)
+          \t}
+          \tdiv, exp := unit, 0
+          \tfor n := bytes / unit; n >= unit && exp < 5; n /= unit {
+          \t\tdiv *= unit
+          \t\texp++
+          \t}
+          \treturn fmt.Sprintf("%.1f %ciB", float64(bytes)/float64(div), "KMGTPE"[exp])
+          }
+          ''')
+
+          p = Path('README.md')
+          s = p.read_text()
+          marker = '## Development status\n\n'
+          start = s.index(marker) + len(marker)
+          end = s.index('\n## ', start) if '\n## ' in s[start:] else len(s)
+          replacement = '''Current milestone: **v0.4.0 Downloader**.
+
+          This milestone adds a resumable, verified Baidu-to-local cache engine. Cache filenames use only opaque internal IDs under `./temp/cache/`; original source names never become Windows paths. HTTP Range resume is validated before append, and exact size plus MD5 (when supplied by Baidu) must pass before `LOCAL_READY`.
+
+          v0.4 deliberately stages only one byte-bounded batch before downloading and enforces a 30 GiB development cache watermark. It still performs **no Google Drive upload and no automatic local/Baidu cleanup**. The endless producer/consumer pipeline is enabled only after Drive verification exists.
+
+          Design and release gates:
+
+          - `docs/ARCHITECTURE.md`
+          - `docs/IMPLEMENTATION_PLAN.md`
+          - `docs/VERSIONING.md`
+          - `docs/DESIGN_DECISIONS.md`
+          - `docs/SECURITY.md`
+          - `docs/TESTING.md`
+          - `docs/V04_DOWNLOADER.md`
+
+          The public repository must never contain real account cookies/tokens, browser profiles, task databases, private share manifests, logs, or downloaded files.
+          '''
+          p.write_text(s[:start] + replacement + s[end:])
+          PY
+      - name: Normalize and validate
+        run: |
+          go mod tidy
+          gofmt -w ./cmd ./internal
+          go test ./... -count=1
+          go vet ./...
+      - name: Remove one-shot helper and commit
+        run: |
+          rm -f .github/workflows/v04-finalize.yml
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git commit -m 'feat: finish bounded v0.4 downloader pass'
+          git push origin HEAD:dev/v0.4-downloader
