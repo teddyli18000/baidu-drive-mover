@@ -15,7 +15,7 @@ func TestEnsureCreatesOnlyTempTree(t *testing.T) {
 	if err := layout.Ensure(); err != nil {
 		t.Fatal(err)
 	}
-	for _, p := range []string{layout.Temp, layout.Auth, layout.ChromeProfile, layout.Cache, layout.Logs, layout.Tasks, layout.Tools} {
+	for _, p := range []string{layout.Temp, layout.Auth, layout.ChromeProfile, layout.BrowserTemp, layout.BrowserCache, layout.Cache, layout.Logs, layout.Tasks, layout.Tools} {
 		info, err := os.Stat(p)
 		if err != nil {
 			t.Fatalf("expected %s: %v", p, err)
