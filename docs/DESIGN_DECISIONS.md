@@ -2,7 +2,7 @@
 
 This file records decisions that should not drift during implementation without an explicit document update.
 
-## D1. Primary language: Go
+## D1. Primary language and toolchain: Go
 
 Decision: build the application in Go.
 
@@ -14,7 +14,7 @@ Reasons:
 - no Python/Node/Conda/WSL requirement for the user;
 - straightforward unit/integration testing in CI.
 
-Target toolchain starts at Go 1.23 and may be raised deliberately later.
+Baseline module compatibility is Go 1.25. Release/CI builds use the current supported Go 1.26 toolchain unless deliberately changed. The user does not need Go installed for packaged releases.
 
 ## D2. User-facing shape: one executable
 
@@ -75,9 +75,11 @@ Packaging target:
 
 If rclone cannot meet the runtime-write boundary or single-entry UX after testing, replace it with direct Google Drive API integration before v0.5.0. This change requires updating this decision first.
 
-## D8. SQLite: pure-Go driver preferred
+## D8. SQLite: pure-Go driver
 
-Decision: use SQLite for durable task state, preferably via a pure-Go driver to avoid CGO requirements in Windows release builds.
+Decision: use SQLite for durable task state via `modernc.org/sqlite`, pinned to a tagged release, to avoid CGO requirements in Windows release builds.
+
+Initial pin: `modernc.org/sqlite v1.56.0`.
 
 Requirements:
 
