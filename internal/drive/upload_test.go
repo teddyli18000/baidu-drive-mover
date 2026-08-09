@@ -228,22 +228,14 @@ func TestUploaderDetectsLocalMutationDuringTransfer(t *testing.T) {
 }
 
 func TestUploaderRejectsNonOpaqueRegisteredCachePath(t *testing.T) {
-	store, layout, file, _ := newUploadFixture(t, "task-badcache", "408", "/bad.bin", []byte("safe"))
-	if err := store.MarkLocalReady(context.Background(), file.TaskID, file.FileID, "cache/other/attacker.bin"); err != nil {
-		// The fixture is already LOCAL_READY, so change it through a fresh fixture state below instead.
-		_ = err
-	}
-	// Build a new BAIDU_STAGED file whose local-ready transition records the wrong path.
-	store2, layout2, file2, _ := newUploadFixtureWithCachePath(t, "task-badcache2", "409", "/bad.bin", []byte("safe"), "cache/other/attacker.bin")
+	store, layout, _, _ := newUploadFixtureWithCachePath(t, "task-badcache", "409", "/bad.bin", []byte("safe"), "cache/other/attacker.bin")
 	remote := newFakeUploadRemote("root-upload")
-	if _, err := (&Uploader{Layout: layout2, State: store2, Remote: remote}).Run(context.Background(), "task-badcache2"); err == nil {
+	if _, err := (&Uploader{Layout: layout, State: store, Remote: remote}).Run(context.Background(), "task-badcache"); err == nil {
 		t.Fatal("expected non-opaque cache path rejection")
 	}
 	if len(remote.calls) != 0 {
 		t.Fatalf("bad cache path reached Drive: %v", remote.calls)
 	}
-	_ = store
-	_ = layout
 }
 
 func newUploadFixture(t *testing.T, taskID, fileID, logical string, data []byte) (*state.Store, *runtimepath.Layout, state.File, []byte) {
