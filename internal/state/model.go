@@ -52,9 +52,18 @@ type Task struct {
 	ExtractionCode string
 	Status         TaskStatus
 	DriveRootID    string
+	DriveRootName  string
 	LastError      string
 	CreatedAt      time.Time
 	UpdatedAt      time.Time
+}
+
+type Directory struct {
+	TaskID      string
+	LogicalPath string
+	DriveID     string
+	CreatedAt   time.Time
+	UpdatedAt   time.Time
 }
 
 type File struct {
@@ -94,7 +103,7 @@ var allowedFileTransitions = map[FileStatus]map[FileStatus]bool{
 	FileBaiduStaging:   {FileBaiduStaged: true, FileFailedRetryable: true, FileFailedPermanent: true},
 	FileBaiduStaged:    {FileDownloading: true, FileFailedRetryable: true, FileFailedPermanent: true},
 	FileDownloading:    {FileLocalReady: true, FileFailedRetryable: true, FileFailedPermanent: true},
-	FileLocalReady:     {FileDriveUploading: true, FileFailedRetryable: true, FileFailedPermanent: true},
+	FileLocalReady:     {FileDriveUploading: true, FileDriveUploaded: true, FileFailedRetryable: true, FileFailedPermanent: true},
 	FileDriveUploading: {FileDriveUploaded: true, FileFailedRetryable: true, FileFailedPermanent: true},
 	FileDriveUploaded:  {FileDriveVerified: true, FileFailedRetryable: true, FileFailedPermanent: true},
 	FileDriveVerified:  {FileCleanupPending: true, FileDone: true},
