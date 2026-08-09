@@ -204,3 +204,37 @@ For each uploaded file the application independently queries Drive metadata and 
 - MD5 equality against a hash computed from the verified local cache file.
 
 Only then may the state advance to `DRIVE_VERIFIED`. If destination evidence is missing, ambiguous, or contradictory, the task remains incomplete and cleanup remains forbidden.
+
+## D19. v0.6 cleanup is batch-scoped and requires durable authorization
+
+Decision: automatic Baidu/local cleanup is authorized and recovered at the isolated staging-batch level.
+
+A batch can enter cleanup only when every assigned file has independently reached `DRIVE_VERIFIED` (or is already recovering from `CLEANUP_PENDING`) and has a persisted Drive ID. One SQLite transaction changes eligible files to `CLEANUP_PENDING` and grants `cleanup_allowed=1` only to the exact registered local cache files and Baidu batch directory.
+
+Rules:
+
+- no destructive local/Baidu action may run before that authorization transaction commits;
+- Drive objects never receive cleanup authorization in v0.6;
+- local cache deletion must re-derive and match `cache/<task-id>/<file-id>.bin` before using the runtime containment remover;
+- Baidu deletion is limited to the registered `/BaiduDriveMover/<task-id>/<batch-id>` directory;
+- already-missing authorized objects are reconciled idempotently rather than recreated;
+- completion is recorded separately from authorization using durable cleanup outcome fields;
+- the task-level `/BaiduDriveMover/<task-id>` root is cleaned only after every file is `DONE` and every batch directory is already reconciled clean;
+- `/BaiduDriveMover` itself and the Baidu recycle bin are never deleted/emptied automatically.
+
+Reason: the isolated batch is the smallest remote unit that can be safely removed without risking another staged file in the same directory.
+
+## D20. v0.6 starts with a cooperative bounded pipeline scheduler
+
+Decision: SQLite remains the coordination source of truth and the first v0.6 scheduler repeatedly pumps bounded work in downstream-first priority instead of introducing unbounded goroutine queues.
+
+Priority:
+
+1. cleanup verified batches to release cache reservations;
+2. Drive upload/verification of local-ready files;
+3. local download while below the cache watermark;
+4. stage another bounded Baidu batch only when downstream capacity exists.
+
+This provides continuous end-to-end progression and backpressure while keeping each existing stage independently idempotent. Controlled parallel workers may be introduced later only if the same database invariants and byte/file watermarks remain authoritative.
+
+Reason: v0.6 adds the first destructive stage. Proving cleanup/recovery correctness before increasing cross-stage concurrency reduces the chance that a scheduling race becomes a deletion bug.
