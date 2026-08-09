@@ -156,9 +156,9 @@ func (c *Client) TransferFiles(ctx context.Context, link ShareLink, share ShareC
 		TargetFileNums      int    `json:"target_file_nums"`
 		TargetFileNumsLimit int    `json:"target_file_nums_limit"`
 		Info                []struct {
-			Errno int   `json:"errno"`
-			FsID  int64 `json:"fsid"`
-			FsID2 int64 `json:"fs_id"`
+			Errno int    `json:"errno"`
+			FsID  int64  `json:"fsid"`
+			FsID2 int64  `json:"fs_id"`
 			Path  string `json:"path"`
 		} `json:"info"`
 	}

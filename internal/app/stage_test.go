@@ -30,7 +30,7 @@ func (a *fakeStageAPI) AccessSharePage(context.Context, baidu.ShareLink) (baidu.
 func (a *fakeStageAPI) VerifyPassword(context.Context, baidu.ShareLink, baidu.ShareContext, string) error {
 	return nil
 }
-func (a *fakeStageAPI) CookieString() string { return "BDUSS=fake; STOKEN=fake" }
+func (a *fakeStageAPI) CookieString() string  { return "BDUSS=fake; STOKEN=fake" }
 func (a *fakeStageAPI) HasLoginCookies() bool { return a.loggedIn }
 func (a *fakeStageAPI) EnsureStagingDirectory(_ context.Context, remotePath string) error {
 	if a.objects[remotePath] == nil {
