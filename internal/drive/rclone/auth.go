@@ -152,7 +152,7 @@ func looksLikeAuthFailure(raw string) bool {
 }
 
 func (c *Client) driveRemoteListed(ctx context.Context) (bool, error) {
-	result, err := c.RunBase(ctx, "listremotes", "--name", RemoteName, "--exact")
+	result, err := c.RunBase(ctx, "listremotes")
 	if err != nil {
 		return false, fmt.Errorf("list rclone Drive remote: %w", err)
 	}

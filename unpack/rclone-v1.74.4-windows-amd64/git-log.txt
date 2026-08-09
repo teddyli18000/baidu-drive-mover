@@ -1,0 +1,807 @@
+commit 5bc93a2a7ab0ebd0a11352bc4968eabeffb18027
+Author: Nick Craig-Wood <nick@craig-wood.com>
+Date:   Wed Jul 8 17:18:57 2026 +0100
+
+    Version v1.74.4
+
+commit d9b28b9e7dab3d4197e69bae5443cde7957de6d0
+Author: Nick Craig-Wood <nick@craig-wood.com>
+Date:   Wed Jul 8 17:01:02 2026 +0100
+
+    gui: update embedded release to 1.1.10
+
+commit 874a804f5289517defdd7de68b2a374837080265
+Author: Nick Craig-Wood <nick@craig-wood.com>
+Date:   Tue Jun 30 18:12:34 2026 +0100
+
+    local: stop --links symlinks escaping the destination directory CVE-2026-54572
+    
+    With -l/--links rclone recreates a .rclonelink object as a symlink. A
+    malicious or compromised source could serve a symlink whose target points
+    outside the destination, plus a sibling object whose path traverses it, so
+    that rclone followed the planted symlink and wrote outside the destination
+    causing arbitrary file write.
+    
+    When translating symlinks, rclone now performs all destination writes
+    (directory creation, file writes and symlink creation) through an os.Root
+    anchored at the destination. os.Root resolves every path component relative
+    to the destination's file descriptor and refuses any that escapes the root,
+    even under concurrent modification, so a planted symlink can never be
+    traversed out of the destination.
+    
+    Symlinks are still reproduced verbatim - including ones whose target points
+    outside the destination - so backups remain faithful. Only writing
+    *through* such a link is refused. In-tree symlinks are unaffected.
+    
+    Fixes CVE-2026-54572
+    Fixes GHSA-cf44-9pgv-m4xc
+    
+    (cherry picked from commit 1154afebee986180b489084d38e2a0c578751498)
+
+commit e58f09739a35774ca82b5211d2377ac0f2051500
+Author: Nick Craig-Wood <nick@craig-wood.com>
+Date:   Thu Jun 25 22:00:40 2026 +0100
+
+    local: don't restore setuid/setgid/sticky bits from metadata by default GHSA-945v-v9p3-v5xw
+    
+    When applying the "mode" from --metadata the local backend cast the
+    source value straight to an os.FileMode, so a source that supplied a
+    mode with Go's setuid, setgid or sticky bits set would have those bits
+    applied to the freshly written file. As both the file content and its
+    metadata come from the source remote, a malicious source could plant a
+    setuid binary, and a victim running "rclone copy -M" as root against
+    an untrusted remote could end up with a root-owned setuid binary with
+    attacker-controlled content.
+    
+    Rclone records "mode" in the unix st_mode layout where the special
+    bits live in different positions to Go's os.FileMode, so honest
+    sources never actually round-tripped these bits in the first place.
+    Apply only the permission bits by default, which closes this off and
+    is backwards compatible, and add the --local-metadata-restore-special-bits
+    lag to restore the previous behaviour for trusted sources such as
+    restoring a system backup made by rclone.
+    
+    See: GHSA-945v-v9p3-v5xw
+    (cherry picked from commit 637a8300027096ca3447cf097e56a5457c318243)
+
+commit 7e78929575b05d71ffcfa9f3b1066fe7682a54b6
+Author: Nick Craig-Wood <nick@craig-wood.com>
+Date:   Tue Jul 7 12:48:57 2026 +0100
+
+    s3: strip STS security token on same-host HTTPS->HTTP redirect GHSA-cf44-9pgv-m4xc
+    
+    The CheckRedirect policy strips the X-Amz-Security-Token header when a
+    redirect chain crosses a host, but it only compared the host and ignored
+    the scheme. A redirect that kept the same host:port but downgraded
+    https:// to http:// was treated as the same host, so the STS session
+    token was re-sent over a plaintext connection where it could be observed.
+    
+    Fixes GHSA-cf44-9pgv-m4xc
+    
+    (cherry picked from commit 1a28451ea6fc8ac1806b0e9923dcb5b3f543f7fa)
+
+commit 015fd0eba1cb138eef081517795fed47a2873f2d
+Author: Nick Craig-Wood <nick@craig-wood.com>
+Date:   Tue Jun 23 14:33:45 2026 +0100
+
+    serve restic: fix --private-repos isolation bypass CVE-2026-59733
+    
+    A user could reach another user's private repository by sending a path
+    such as /<me>/../<victim>/config. The authorization check compares the
+    first path segment against the authenticated user, while the backend
+    object key was built from the raw, un-cleaned URL path.
+    
+    Reject any non-canonical request path so the authorization segment and
+    the backend object key can no longer disagree.
+    
+    Fixes GHSA-fqj9-69pf-6pjg
+    
+    (cherry picked from commit dade21c1616035b044df0eef7ee6a85aeb06a139)
+
+commit 1a746732441e8158f32fab35924b23701e719a8c
+Author: Nick Craig-Wood <nick@craig-wood.com>
+Date:   Mon Jun 29 17:53:49 2026 +0100
+
+    archive extract: fix path traversal letting archives escape the destination CVE-2026-59732
+    
+    Archive entry names are attacker controlled. `rclone archive extract` stripped
+    only a leading `./` and then joined the entry name onto the destination
+    directory with `path.Join`, which collapses `..` segments. An entry such as
+    `../escaped.txt` extracted into `:s3:bucket/safe/prefix` therefore resolved to
+    `bucket/safe/escaped.txt`, outside the selected `prefix` directory - a path
+    traversal ("Zip Slip") attack that could create or overwrite sibling objects on
+    any destination remote.
+    
+    Entry names are now validated before use: a leading `./` is still stripped (tar
+    archives created with `tar -czf archive.tar.gz .` rely on this), but any entry
+    with a `..` path component is rejected. Both `/` and `\` are treated as
+    separators when looking for `..`, as the local backend treats `\` as a path
+    separator on Windows.
+    
+    Fixes: GHSA-4vr5-p2gc-h23p
+    (cherry picked from commit d11efe0d58fe6a2d6d90675bb9d8ee5840c51e1d)
+
+commit c89b766cf417fddbe7eace40d31262ecb85bfa93
+Author: Nick Craig-Wood <nick@craig-wood.com>
+Date:   Mon Jun 29 16:09:56 2026 +0100
+
+    serve s3: fix path traversal letting clients see files in the root GHSA-8v25-v8p6-qf7v
+    
+    S3 object keys are opaque names that may legally contain `..` segments. `serve
+    s3` built backend paths with `path.Join(bucket, key)`, which normalised the key
+    so a request such as `GET /bucket/../root-secret.txt` resolved to a file outside
+    the selected bucket elsewhere under the serve root. Listing prefixes and
+    multipart uploads were affected also.
+    
+    This did not allow reading of files outside the root, but did allow reading of
+    files in the root which normally aren't visible; only directories are visible as
+    buckets normally.
+    
+    Because `serve s3` maps keys to file paths it cannot represent every opaque S3
+    key, so rather than normalising keys (which would alias distinct keys onto one
+    file as well as allow traversal) it now rejects any key that is not already in
+    canonical path form - containing `..`, `.`, `//` or a leading or trailing slash
+    - with a 400 Bad Request, as MinIO does. Directory listing prefixes are
+    validated the same way but allow the empty bucket-root prefix and an optional
+    trailing slash.
+    
+    Fixes: GHSA-8v25-v8p6-qf7v
+    (cherry picked from commit 83d1e62aa9e0dbd10a5d7eb34c117ae997268cdf)
+
+commit 9ebca99cd22c078d8e81d0d05cdd68cbf1954f20
+Author: Nick Craig-Wood <nick@craig-wood.com>
+Date:   Wed Jul 8 15:00:33 2026 +0100
+
+    build: fix multiple CVEs by upgrading to go1.26.5
+    
+    - CVE-2026-39822: os: Root escape via symlink plus trailing slash
+    - CVE-2026-42505: crypto/tls: Encrypted Client Hello privacy leak
+    
+    (cherry picked from commit e753736df661d8c032f86ff5d2d6e3ab45e86837)
+
+commit 0f4a8fad6432f2b81e69aaacc6f1cafb29f890d0
+Author: Nick Craig-Wood <nick@craig-wood.com>
+Date:   Wed Jul 8 11:46:12 2026 +0100
+
+    s3: fix mounting a prefix failing with 403 when HEAD is not permitted
+    
+    When mounting or otherwise opening an S3 prefix without a trailing
+    slash, rclone probes the path with a HEAD request to see whether it is
+    actually a file. Since v1.72.0 (#8975) any error other than "not
+    found" from that probe was fatal, so credentials scoped to a prefix -
+    which return 403 rather than 404 for the prefix key - could no longer
+    open the prefix at all.
+    
+    6440052fbdb51688 s3: fix single file copying behavior with low permission
+    
+    A 403 on the probe is ambiguous: it can mean either "this is the file
+    you named but you may not HEAD it" or "this is a prefix you may list
+    but not HEAD". When the HEAD is not permitted we now fall back to a
+    listing to disambiguate: if the path has children it is treated as a
+    directory, otherwise it is treated as a file.
+    
+    Fixes #9582
+    
+    (cherry picked from commit 2d6d0da37b76849aeb29caaf04e681f5ee2947e7)
+
+commit 888a80e64b98208d5c171a0022445f104d2f9537
+Author: Nick Craig-Wood <nick@craig-wood.com>
+Date:   Tue Jul 7 11:08:02 2026 +0100
+
+    drive, googlephotos: warn when using rclone's shared client_id #9580
+    
+    The shared Google Drive and Google Photos client_id is being retired and
+    will stop working during 2026. Warn users who rely on it (ie who have not
+    configured their own client_id) so they can create their own in advance.
+    
+    The warning is only shown for auth flows that actually use the shared
+    client_id, not for service account, environment or anonymous auth.
+    
+    See: https://forum.rclone.org/t/google-drive-and-google-photos-users-action-required/54005
+    (cherry picked from commit d03eb5858618352f6cfd3e2026c05c6ea0f48515)
+
+commit b440d18897a67f7dbd56631e1918923962e9385f
+Author: Nick Craig-Wood <nick@craig-wood.com>
+Date:   Tue Jul 7 11:10:52 2026 +0100
+
+    drive: fix stray %!(EXTRA) in unexportable google document log message
+    
+    (cherry picked from commit 42f7eda4f1e4a4413a43fa393018e26eb5858a6a)
+
+commit c9ff593a7f8ce4fd06d942705d7d364ba6f51feb
+Author: Nick Craig-Wood <nick@craig-wood.com>
+Date:   Tue Jul 7 10:56:23 2026 +0100
+
+    serve/http: fix --disable-zip so it works over rc
+    
+    The --disable-zip flag was registered manually and was missing from
+    OptionsInfo, so it could not be set over the rc interface. Move it
+    into OptionsInfo like serve webdav does, which keeps the command line
+    flag and also makes it settable via rc.
+    
+    (cherry picked from commit 60cb844f9ad62024fc94803a09c6a583334571b3)
+
+commit 39487c5ebf3de97c7aafbaf146a86771846e072e
+Author: Sanjay Santhanam <51058514+Sanjays2402@users.noreply.github.com>
+Date:   Sat Jul 4 01:57:27 2026 -0700
+
+    serve webdav: fix MOVE overwrite failing without Overwrite header
+    
+    Per RFC 4918 section 10.6, when the Overwrite header is omitted from a
+    COPY or MOVE request the resource MUST treat the request as if
+    Overwrite: T had been sent.
+    
+    The upstream golang.org/x/net/webdav library mishandles this for MOVE
+    by checking == "T" instead of != "F", so an absent header is treated
+    as Overwrite: F and the request fails with 412 Precondition Failed.
+    
+    Normalise the header to T in the rclone WebDAV server before
+    delegating to the upstream handler when the client did not send one.
+    This restores RFC-compliant default behaviour and can be removed once
+    the upstream fix in golang/go#66059 lands and the golang.org/x/net
+    dependency is bumped.
+    
+    Fixes #9496
+    
+    (cherry picked from commit cfb9a10a3d684e544abfbf03d440b739e3b30dc0)
+
+commit eb096559499a984835d545d286b4c08e0ef1b762
+Author: Amit Mishra <amit.mishra.eee21@itbhu.ac.in>
+Date:   Sat Jun 27 00:00:24 2026 +0530
+
+    fs: fix negative offset when a suffix Range request exceeds object size
+    
+    A Range header requesting a suffix longer than the object (e.g.
+    "bytes=-90407" against a 5 byte object) caused RangeOption.Decode to
+    compute a negative offset (size - End), which serve.Object then used
+    directly as a slice/seek offset and panicked with "slice bounds out of
+    range". FixRangeOption (used by backends like OneDrive/Box that lack
+    native suffix-range support) had the same root cause: it produced a
+    RangeOption with a negative Start, which Header() silently dropped,
+    turning the request into the wrong byte range instead of erroring or
+    serving the whole object.
+    
+    Per RFC 7233 section 2.1, when the suffix-length exceeds the
+    representation size, the entire representation should be served.
+    Clamp the computed offset/start to 0 in both places.
+    
+    Fixes #6310
+    
+    (cherry picked from commit cb41e42d04dacbdfd9a69bcc4ce617799125bd0a)
+
+commit c2d711e71461e442830560316794dd97b44c0069
+Author: Sanjays2402 <51058514+Sanjays2402@users.noreply.github.com>
+Date:   Wed Jul 1 17:45:11 2026 -0700
+
+    accounting: fix goroutine leak in NewStatsGroup for zero-transfer rc jobs
+    
+    NewStatsGroup started the averageLoop goroutine unconditionally at
+    group creation. In an rcd daemon driven by many short rc sync/move
+    calls (a common pattern for scheduled spool flushes), each call gets
+    a fresh job/N stats group. When such a job transferred zero files
+    the loop was never stopped, because _stopAverageLoop is only reached
+    via DoneTransferring once transferring and checking both go from
+    non-empty back to empty, which never happens if nothing was ever
+    transferring in the first place. The result was one leaked goroutine
+    per rc call, growing unbounded until the daemon was OOM-killed
+    (reported: ~61k goroutines and ~640 MB RSS after ~7 days from a
+    per-minute timer over 6 mappings).
+    
+    This is the same class of leak as #8571, which fixed the equivalent
+    auto-start in NewStats. Fix it the same way: do not start the average
+    loop at group creation. NewTransfer and NewTransferRemoteSize already
+    call startAverageLoop when real transfer activity begins, and
+    DoneTransferring already stops it when the last transfer completes,
+    so on-demand behaviour is unchanged for groups that actually do work.
+    Groups that never transfer anything now cost zero goroutines.
+    
+    Adds a regression test that fails without the fix.
+    
+    Fixes #9567
+    
+    (cherry picked from commit c91c4cbbffdf34c62fc91d8bfda7c3d315d415e9)
+
+commit 2a6591d1cdbd437dfc62a6ad01248e4d0f33b2cb
+Author: Sandy Luppino <s.luppino@opendrives.com>
+Date:   Fri Jun 26 12:05:28 2026 -0400
+
+    cmd/mount2: fix NFS directory listings by supporting non-zero Seekdir offsets
+    
+    Seekdir handled only a rewind to offset 0 and returned ENOTSUP otherwise.
+    The stateless kernel NFS server opens a fresh directory handle and seeks to
+    the last returned cookie on every readdir continuation, so any listing
+    spanning more than one readdir batch failed over NFS. dirStream is a
+    snapshot taken at Readdir time and go-fuse assigns each entry a sequential
+    offset, so seeking to off positions the stream at index off; off == 0 still
+    resets to the start, preserving the rewind/re-read behaviour.
+    
+    Before: ls of a directory that spans more than one readdir batch failed
+    over NFS with "Unknown error 524".
+    After: it lists correctly.
+    
+    Adds TestDirStreamSeekdir covering rewind, mid-stream resume and the EOF
+    clamp. The full NFS path was validated against a real Linux
+    nfs-kernel-server export over NFSv3, NFSv4.0 and NFSv4.2.
+    
+    Fixes #9547
+    
+    (cherry picked from commit 22aba810748fe0200becb72ab817f93953601e37)
+
+commit b9fd40d18225366e6879f5b3982c703fd5c0dfbe
+Author: Sandy Luppino <s.luppino@opendrives.com>
+Date:   Fri Jun 26 12:04:12 2026 -0400
+
+    cmd/mount2: fix ESTALE over NFS by reporting stable inode numbers
+    
+    setAttr left attr.Ino unset (0) and the NewInode sites left StableAttr.Ino
+    unset, so the kernel saw inode 0 while the node identity differed, which
+    breaks NFS file-handle validation. Set both to the stable VFS inode. The
+    bazil cmd/mount backend does not hit this because its framework assigns
+    stable inodes automatically; go-fuse needs them set explicitly.
+    
+    Before: chmod/chown/truncate on a just-written file through an
+    NFS-exported mount2 mount failed with ESTALE.
+    After: they succeed.
+    
+    Exercising the NFS handle-validation path needs a kernel NFS server, so it
+    isn't covered by the local vfstest harness; validated against a real Linux
+    nfs-kernel-server export over NFSv3, NFSv4.0 and NFSv4.2.
+    
+    #9547
+    
+    (cherry picked from commit 92b78aefa45d99c0e2c160f9a8b99c6d49073378)
+
+commit e4093ec952890e5bbee46196ef34b8402ec3fb45
+Author: Sandy Luppino <s.luppino@opendrives.com>
+Date:   Fri Jun 26 12:03:32 2026 -0400
+
+    cmd/mount2: fix NFS file creation by implementing Mknod
+    
+    The kernel NFS server creates regular files with MKNOD (it
+    creates-then-opens, so vfs_create routes through fuse_create -> FUSE_MKNOD
+    when there is no open intent), but mount2 only implemented Create
+    (FUSE_CREATE, used by local and SMB clients). Without Mknod every NFS file
+    creation failed with ENOTSUPP. This mirrors the cmd/mount mknod handler from
+    #2115.
+    
+    Before: touch through an NFS-exported mount2 mount failed with ENOTSUPP.
+    After: files create normally.
+    
+    Exercising this needs a kernel NFS server, so it isn't covered by the
+    local vfstest harness; validated against a real Linux nfs-kernel-server
+    export over NFSv3, NFSv4.0 and NFSv4.2.
+    
+    #9547
+    
+    (cherry picked from commit 6eecd45bedfe00ff3f9c4341e60115e87ffa169a)
+
+commit 2ebb9a6c72fcb22e1098eabc87aeff8342ae5492
+Author: dithwick <46924962+dithwick@users.noreply.github.com>
+Date:   Wed Jul 1 12:00:26 2026 +0100
+
+    smb: fix for IBM iSeries and signature verification
+    
+    This commit updates go-smb2 to a version that fixes the following issues.
+    
+    - Issue connecting to SMB share from IBM iSeries
+      (see https://forum.rclone.org/t/smb-shares-on-ibm-iseries-update/53550)
+    - Fix for signature verification for async STATUS_PENDING response which
+      resolves a transfer issue with Lenovo DSS-G.
+      (see https://github.com/CloudSoda/go-smb2/pull/48)
+    
+    It also provides additional security hardening, fixing panics on malicious
+    server input
+    (see https://github.com/CloudSoda/go-smb2/pull/51)
+    
+    (cherry picked from commit bf2945bf407c1624f1330be15898bb3613845c4a)
+
+commit 76a96a91b48cdcd9006def608b384350cd1cda85
+Author: Nick Craig-Wood <nick@craig-wood.com>
+Date:   Tue Jun 30 10:52:12 2026 +0100
+
+    mega: fix hard deleted files reappearing in listings - fixes #9554
+    
+    The mega backend keeps the whole account as an in-memory tree. go-mega's
+    Delete with destroy=true (hard_delete) removed the node from its lookup
+    table but left it in its parent's children, so a hard deleted file kept
+    showing up in directory listings until the tree was reloaded. In a
+    long-running mount or serve the file reappeared once the VFS directory
+    cache expired and re-read the backend.
+    
+    Update go-mega to pick up the fix, and let the ghost test exercise
+    whichever delete mode the remote is configured with.
+    
+    (cherry picked from commit b59a17e5e83a08fd45caec5ff8aed0177fd630d9)
+
+commit c98ab6ae97c75dc74b97ac787e0208a5ee6e51bd
+Author: Nick Craig-Wood <nick@craig-wood.com>
+Date:   Mon Jun 29 10:44:13 2026 +0100
+
+    mega: wait for server events after upload, delete and move
+    
+    The mega backend keeps the whole account as an in-memory tree which
+    go-mega reconciles asynchronously from the server's event stream. After
+    an upload, delete or move the optimistic local update could be undone
+    moments later when go-mega replayed the corresponding server event,
+    re-adding a node to its parent. In a long-running process such as mount
+    or serve this could briefly show a just-deleted file in a listing, or
+    make a moved file reappear shortly afterwards.
+    
+    Wait for the server to confirm uploads, deletes and moves so the
+    in-memory tree is settled before returning, matching what Rmdir and
+    Purge already do. The move wait was also previously started after the
+    server-side move so only the rename was covered.
+    
+    Add an internal test reproducing the lingering listing via a tight
+    put/remove/list loop.
+    
+    (cherry picked from commit d489c59a59d2c44b4384461e5384ccc39a85fd76)
+
+commit e9dcfa12c239cb1192d7cf54c5fbbd36be59d5ec
+Author: Nick Craig-Wood <nick@craig-wood.com>
+Date:   Tue Jun 30 13:52:51 2026 +0100
+
+    vfs: fix hang reopening a file during the handle-caching grace period
+    
+    When a cached file was closed, --vfs-handle-caching kept its handle and
+    downloaders alive for a grace period and closed them later from a timer.
+    The deferred close drops the item lock while tearing down the
+    downloaders, leaving the file handle open. A reopen landing in that
+    window saw no grace timer and a live handle, failed to create the cache
+    file with "internal error: didn't Close file" and removed the cache
+    file, which hung the application reopening the file.
+    
+    Reopens now wait for an in-progress grace-period close to finish so they
+    start from a fully closed item.
+    
+    See: https://forum.rclone.org/t/opening-a-recently-closed-and-cached-file-hangs-rclone/53986/
+    (cherry picked from commit 9728fa0ede0623fb031fa0772bb6a5a1e4e7b2f0)
+
+commit a8e9793c02df7b62df930a92341cbb316f1439e1
+Author: max <max@example.com>
+Date:   Tue Jun 30 20:24:20 2026 +0200
+
+    s3: correct documented copy_cutoff minimum to 1 byte - Fixes #7391
+    
+    (cherry picked from commit 48f8d63d9e834b1f80259315d788fbc989f2d17c)
+
+commit 81cfc9ab1b6525dc8b364bd68e8135a974a5f46e
+Author: Nick Craig-Wood <nick@craig-wood.com>
+Date:   Tue Jun 23 10:47:04 2026 +0100
+
+    fs: fix command line flag being ignored when set to its default value
+    
+    A backend flag set on the command line to a value that happened to
+    equal its default was silently ignored, letting the config file win
+    instead.
+    
+    For example --sftp-user defaults to the current user, so connecting as
+    that same user with --sftp-user=USER had no effect and caused rclone
+    to use the value from the config file.
+    
+    See: https://forum.rclone.org/t/sftp-user-parsing-as-cli-argument-broken/53955
+    (cherry picked from commit 105feca22bae274f341f97b4880120b1b204a567)
+
+commit efa0e81074d592e827a5fd64e62252e11268df71
+Author: Gaurav <amvermagaurav007@gmail.com>
+Date:   Tue Jun 30 18:14:58 2026 +0530
+
+    docs: fix copy to clipboard functionality for code blocks
+    
+    (cherry picked from commit 0d1937f872f86fc7300a69024bc1a60023dcd313)
+
+commit 5d94fa318442a3e59b8415c30b4e13828b7f7d61
+Author: user77 <abubakarm@gmail.com>
+Date:   Tue Jun 30 16:29:19 2026 +0500
+
+    fs/operations: correct DeleteFile --backup-dir documentation
+    
+    DeleteFile always passes a nil backupDir to DeleteFileWithBackupDir, so
+    it never honours --backup-dir. The previous comment said it would move
+    the file into the backup dir when --backup-dir was in effect, which does
+    not match the code. Update the comment to state that DeleteFile always
+    deletes and that callers should use DeleteFileWithBackupDir when
+    --backup-dir support is required.
+    
+    Also document on DeleteFileWithBackupDir that the backupDir is found with
+    BackupDir, which is relatively expensive, so it should be looked up once
+    outside any delete loop rather than per object.
+    
+    #7566
+    
+    (cherry picked from commit 0d3c9e929bcf2ef895d886a2343eab2c19080d9a)
+
+commit ad7f846048f26be974968b41a27753725bed4ad2
+Author: Nick Craig-Wood <nick@craig-wood.com>
+Date:   Mon Jun 29 18:42:03 2026 +0100
+
+    build: update golang.org/x/image to v0.43.0 to fix image decoding vulnerabilities
+    
+    govulncheck reported four vulnerabilities in golang.org/x/image v0.41.0,
+    all reachable via the internxt backend's thumbnail/image upload path:
+    
+    - CVE-2026-46604 (GO-2026-5066): panic decoding a TIFF image with an
+      out-of-bounds strip offset
+    - CVE-2026-46602 (GO-2026-5062): unbounded memory use from lack of a
+      limit on TIFF tile sizes
+    - CVE-2026-46601 (GO-2026-5061): panic on a WEBP VP8 alpha channel size
+      mismatch
+    - CVE-2026-33813 (GO-2026-4961): panic decoding a large WEBP image on
+      32-bit platforms
+    
+    Updating to v0.43.0 fixes all four.
+    
+    (cherry picked from commit fee55edd155a33d56910679ce5fa38f6dabef3cb)
+
+commit 1a55ea17bf89bf0906a47a7bee55e40797636690
+Author: happysnaker <73147033+happysnaker@users.noreply.github.com>
+Date:   Tue Jun 30 01:19:49 2026 +0800
+
+    docs: clarify copyto command description - Fixes #9527
+    
+    (cherry picked from commit 8ac978c2696ad89a13508c3a9222f3a4673f57d8)
+
+commit f0b43b59b413995e1ea7a4a1de732a04025c169f
+Author: Bryan Stenson <bryan.stenson@gmail.com>
+Date:   Sun Jun 28 21:53:05 2026 +0000
+
+    docs: fix typo in remote setup docs
+    
+    (cherry picked from commit 6bbc28cf02dc3d968c07c84cae0e75f99f8ead23)
+
+commit af2853f7c9613191b9d8976ebdb3be4fae21d49e
+Author: max <max@example.com>
+Date:   Thu Jun 25 01:20:01 2026 +0200
+
+    serve s3: fix spurious 404 on HEAD/GET during VFS writeback - fixes #8188
+    
+    After an upload (notably multipart) to a slow backing remote, the file
+    lives in the VFS and is returned by ListBucket, but node.DirEntry() stays
+    nil until the --vfs-write-back writeback completes. HeadObject and
+    GetObject returned gofakes3.KeyNotFound while it was nil, so a HEAD/GET in
+    that window 404'd even though the object existed.
+    
+    getFileHashByte already falls back to hashing the VFS cache when the
+    backing object isn't available yet. Drop the early nil return, pass the
+    node (not the fs.Object) to getFileHashByte, and take the Content-Type
+    from fs.MimeTypeFromName when the backing object isn't there yet.
+    
+    (cherry picked from commit 445528a3fb19669dc9dd2c2c3ffa04257162aaee)
+
+commit bc6d5894f2c543ef74ce5cf1d806f487d5106900
+Author: lewoberst <github@jan-o-sch.net>
+Date:   Fri Jun 26 19:37:02 2026 +0200
+
+    * s3: fix error mapping in GetObject to match HeadObject
+    
+    The HeadObject path translates a 404 (Not Found) and a 405 (Method Not
+    Allowed) response into fs.ErrorObjectNotFound, but the GetObject path
+    returns the raw AWS SDK error instead. With --s3-no-head-object set,
+    Object.Open() is the first request to hit the source for a GET
+    operation, so callers that rely on fs.ErrorObjectNotFound see an
+    opaque "operation error S3: GetObject, ... StatusCode: 404" string
+    when --s3-no-head-object is set.
+    
+    Mirror the error handling of HeadObject. The 405 (Method Not Allowed)
+    case applies to GetObject for the same reason it applies to
+    HeadObject: A request that specifies the versionId of a delete marker
+    returns 405 instead of 404 (commit 8470bdf8104e, AWS S3 delete-marker
+    docs).
+    
+    Co-authored-by: Jan Schlien <rclone-github@jan-o-sch.net>
+    (cherry picked from commit c1df24f14227613a45315a56ddb0612323d5b8e2)
+
+commit 82c899e39c72af5a19525a76dddf1449522160eb
+Author: Nick Craig-Wood <nick@craig-wood.com>
+Date:   Fri Jan 23 17:34:35 2026 +0000
+
+    filter: fix --files-from copy stopping at the first unreadable file
+    
+    Before this change, with --files-from and --no-traverse, a single file
+    that could not be read (for example permission denied) stopped all the
+    other files in the list being copied.
+    
+    This happened because the error was returned from the listing, which
+    caused the whole source listing to be discarded.
+    
+    This change counts and logs such per-file errors and carries on, so the
+    readable files are still copied and rclone exits with a non-zero error
+    code.
+    
+    Fixes #9115
+    
+    (cherry picked from commit 9ab8e4724a035c403c9a97facc041316b3c476a9)
+
+commit 215dd7a06ab35f335d79cdaa35e1d015bdea9392
+Author: Nick Craig-Wood <nick@craig-wood.com>
+Date:   Mon Jun 22 15:17:55 2026 +0100
+
+    docs: Fix RELEASE.md
+    
+    (cherry picked from commit 89c745c0aadd9224038f57a14558e7acd94c740a)
+
+commit 5e190ba2a6aaf6b44061ea79d69bd0345b5dfb95
+Author: Nick Craig-Wood <nick@craig-wood.com>
+Date:   Sun Jun 21 16:55:55 2026 +0100
+
+    ncdu: fix duplicated keystrokes on Windows by pinning tcell to v2.9.0
+    
+    Since v1.74.0, ncdu doubled every keystroke on Windows: pressing Enter
+    entered a directory and immediately descended a level deeper, "n" sorted
+    by name and then reversed the order, and so on. Arrow keys were
+    unaffected.
+    
+    The cause is an upstream regression in github.com/gdamore/tcell/v2
+    pulled in by the v2.9.0 -> v2.13.8 bump in commit 23917555. The same
+    regression affects lazygit and micro.
+    
+    There is no fixed tcell release, so pin tcell back to v2.9.0, the last
+    version before that commit, until the input handling is fixed upstream.
+    
+    See: https://github.com/gdamore/tcell/issues/1124
+    See: https://github.com/jesseduffield/lazygit/issues/5344
+    Fixes #9539
+    
+    (cherry picked from commit d204b29cced3d3e053ca7357c7e4bd6361630f58)
+
+commit a19391014f965caad0f74a85117d050cb2aca45b
+Author: Yash Anil <yashanil98@gmail.com>
+Date:   Sun Jun 14 18:05:27 2026 -0700
+
+    completion: fix powershell completion corrupting non-ASCII names - fixes #9412
+    
+    The Cobra generated PowerShell completion script captures rclone's output
+    through a pipeline with Invoke-Expression. PowerShell decodes that output
+    using [Console]::OutputEncoding, which on non-UTF-8 hosts (for example
+    PowerShell 5.1 on a Windows install with an OEM code page such as CP852)
+    misinterprets the UTF-8 bytes rclone emits and corrupts remote and path
+    names containing non-ASCII characters, so tab completion produces a path
+    that does not exist.
+    
+    Inject "[Console]::OutputEncoding = [System.Text.Encoding]::UTF8" into the
+    generated script immediately before the Invoke-Expression call. This is safe
+    on PowerShell 7+, where UTF-8 is already the default. If the expected line is
+    not present (for example after a Cobra template change) the script is emitted
+    unmodified so we never produce a corrupted completion script.
+    
+    (cherry picked from commit 59c86b01bb39624650badd39f3acfd20be2b743b)
+
+commit dfdcda829e2669d2f5618509df65b07662af3ec7
+Author: Castronaut <caoyuhang@fwerkor.com>
+Date:   Mon Jun 15 19:49:36 2026 +0800
+
+    docs/crypt: fix encrypted size example - Fixes #9202
+    
+    (cherry picked from commit 056f20800a1e259b9a48240c0c4f567d6c528005)
+
+commit e0746b3b8da61abfd76798388580eb109a68a7e7
+Author: Nick Craig-Wood <nick@craig-wood.com>
+Date:   Thu Jun 11 12:12:11 2026 +0100
+
+    docs: drive: note Google verification exemption for personal use apps
+    
+    (cherry picked from commit a8c45fd26215f3311205d070f1ec963f3d0a4769)
+
+commit 3d560453a1c1eb305dc85a1d9a98d4f7ed0ee943
+Author: Nick Craig-Wood <nick@craig-wood.com>
+Date:   Tue Jun 9 12:35:34 2026 +0100
+
+    rc: document that rc API access is equivalent to shell access
+    
+    (cherry picked from commit a37d54b11aaef0ce2c3848382493c9cba56a0fd0)
+
+commit 792a8ac91f566845efe70595e6612b8457e1240e
+Author: Filippo <57143294+FilippoMuschera@users.noreply.github.com>
+Date:   Tue Jun 9 16:21:47 2026 +0200
+
+    docs: drive: update documentation about "Computers" folder
+    
+    Added information about an alternative, easier way to access folders inside
+    "Computers" using rclone. Expanded details about folder behavior in "Computers".
+    
+    (cherry picked from commit fa87df9c4d0aae0759646db35b8241a6aa3ca3e5)
+
+commit 3f80fe0b07c3e433ee54168f1e199c2ca9e1927a
+Author: Nick Craig-Wood <nick@craig-wood.com>
+Date:   Tue May 12 15:44:55 2026 +0100
+
+    accounting: fix goroutine leak in ResetCounters
+    
+    ResetCounters unconditionally restarted the average loop, spawning a
+    ticker goroutine that pinned the StatsInfo even when no loop had been
+    running before. statsGroups.delete calls ResetCounters on every removed
+    group, so deleting N stats groups leaked N goroutines and prevented GC
+    of the underlying StatsInfo objects.
+    
+    Only restart the loop if it was active before the reset.
+    
+    (cherry picked from commit a8f102ce8f784633471391f291ee694aad7df919)
+
+commit 660b6309794ce6bb06508e7210fd3c4e517ed5e4
+Author: Nick Craig-Wood <nick@craig-wood.com>
+Date:   Mon Jun 8 12:00:55 2026 +0100
+
+    docs: fix --windows-event-log-level help
+    
+    (cherry picked from commit ae4a05481806164a0b9fb6f4a57a70c9690038fc)
+
+commit 85a12f22c801365ff7dfdd1accd2579d9c30fce5
+Author: kingston125 <support@filelu.com>
+Date:   Wed May 27 03:07:40 2026 -0400
+
+    backend/filelu: fix recursive listing path handling and file filtering
+    
+    (cherry picked from commit e64480f634c9112ccaf48c71bafce08e2f669191)
+
+commit 0e5e79ed50ad923ee728256e66c8ca114e105316
+Author: Jan-Philipp Reßler <xodarap@xodarap.de>
+Date:   Fri Feb 20 05:05:03 2026 +0100
+
+    docs: bisync - clarify flag interaction and minor changes
+    
+    The behavior of the --track-renames and --max-delete flags combination for
+    bisync have confused me and some other users. So with this PR i added a
+    paragraph to clarify this.
+    
+    (cherry picked from commit ec97bb4d7fab153b1cdfaec2e5b654b80558bc33)
+
+commit 3b00bbf730e08f55ca15a3c5b698141cf84c34a8
+Author: Nick Craig-Wood <nick@craig-wood.com>
+Date:   Fri Jun 5 15:16:29 2026 +0100
+
+    docs: Update RELEASE.md to use cherry-pick -x
+    
+    (cherry picked from commit 25939a1d00b2db8a4caaf16749046be8ebf6a612)
+
+commit 3654e9cfb73bc2e5513c8b3f51f03159ae691f37
+Author: nako-ruru <nako_ruru@163.com>
+Date:   Thu Jun 4 01:04:15 2026 +0800
+
+    webdav: fix mixed property statuses in multi-status responses
+    
+    This PR fixes a bug in the WebDAV backend where directories or files could
+    randomly "disappear" from listings due to strict and fragile multi-status code
+    parsing.
+    
+    Co-authored-by: bright <nako_ruru@sina.com>
+    (cherry picked from commit 9693b3df09a25dd3a23bd622912478e9b86ede4a)
+
+commit 40cd3c99e62ee50891084e6e4a1ee80c8ae742f7
+Author: IceLocke <lockeice@gmail.com>
+Date:   Thu May 28 10:33:42 2026 +0000
+
+    s3: remove session token on cross-host redirects
+    
+    Add a redirect policy to the S3 HTTP client so X-Amz-Security-Token is
+    removed once a redirect chain crosses hosts. Keep stripping it on later
+    same-host hops in the same chain, since net/http copies headers from the
+    initial request for each redirect and can otherwise restore the token.
+    
+    Preserve same-host redirect behavior, retain the standard redirect limit,
+    and add tests for cross-host, same-host, multi-hop, and redirect-loop cases.
+    
+    (cherry picked from commit e7b1eb774c19b8b4302282c1e97cd4dd78960e17)
+
+commit 6653752779a5c4b910430e93cc6fc9174f7c9ac4
+Author: Nick Craig-Wood <nick@craig-wood.com>
+Date:   Mon Jun 1 11:39:30 2026 +0100
+
+    drive: warn when non-exportable Google documents are skipped - #9475
+    
+    Non-exportable Google documents such as Google My Maps, Sites and
+    Forms have no export format, so rclone silently leaves them out of all
+    listings. During a server side move/copy this means they are quietly
+    left behind.
+    
+    Emit a one-off notice when such a document is skipped, telling the
+    user the files are invisible to rclone and pointing them at
+    --drive-show-all-gdocs to include them in server side copies and
+    moves.
+    
+    (cherry picked from commit 786e91d6a7202ca8062abd6a9874d551a78d9eff)
+
+commit 6e67723dc5124c3797c23d478206aa1c6da07d49
+Author: Nick Craig-Wood <nick@craig-wood.com>
+Date:   Wed Jul 8 16:37:38 2026 +0100
+
+    Start v1.74.4-DEV development
