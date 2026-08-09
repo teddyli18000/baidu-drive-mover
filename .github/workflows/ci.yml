@@ -27,14 +27,6 @@ jobs:
         run: |
           go mod tidy
           git diff --exit-code -- go.mod go.sum
-      - name: Check formatting
-        shell: pwsh
-        run: |
-          $bad = gofmt -l ./cmd ./internal
-          if ($bad) {
-            Write-Error "gofmt required:`n$($bad -join "`n")"
-            exit 1
-          }
       - name: Vet
         run: go vet ./...
       - name: Test
@@ -47,7 +39,7 @@ jobs:
           go build -trimpath -ldflags "-s -w -X github.com/teddyli18000/baidu-drive-mover/internal/version.Commit=$env:GITHUB_SHA -X github.com/teddyli18000/baidu-drive-mover/internal/version.BuildDate=$date" -o bin/BaiduDriveMover.exe ./cmd/baidu-drive-mover
 
   linux-race:
-    name: Linux race and logic tests
+    name: Linux formatting, race and logic tests
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -58,5 +50,13 @@ jobs:
           cache: true
       - name: Download locked modules
         run: go mod download
+      - name: Check formatting
+        run: |
+          bad=$(gofmt -l ./cmd ./internal)
+          if [ -n "$bad" ]; then
+            echo "gofmt required:"
+            echo "$bad"
+            exit 1
+          fi
       - name: Test with race detector
         run: go test -race ./... -count=1
