@@ -1,0 +1,70 @@
+name: v0.6 mid normalize
+
+on:
+  push:
+    branches: [dev/v0.6-full-pipeline]
+
+permissions:
+  contents: write
+
+jobs:
+  normalize:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: dev/v0.6-full-pipeline
+      - uses: actions/setup-go@v7
+        with:
+          go-version: '1.26.5'
+          cache: true
+      - name: Update released-schema and cache-path regressions
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+
+          p = Path('internal/state/staging_store_test.go')
+          s = p.read_text()
+          old = '''\tif version != 3 {\n\t\tt.Fatalf("schema=%d want=3", version)\n\t}'''
+          new = '''\tif version != 4 {\n\t\tt.Fatalf("schema=%d want=4", version)\n\t}'''
+          if old not in s:
+              raise SystemExit('staging schema assertion not found')
+          s = s.replace(old, new, 1)
+          marker = '''\tif _, err := store.db.Exec(`SELECT drive_root_name FROM tasks LIMIT 1`); err != nil {\n\t\tt.Fatalf("missing v3 task Drive root name column: %v", err)\n\t}\n'''
+          replacement = marker + '''\tif _, err := store.db.Exec(`SELECT cleaned_at, last_error FROM owned_objects LIMIT 1`); err != nil {\n\t\tt.Fatalf("missing v4 cleanup outcome columns: %v", err)\n\t}\n'''
+          if marker not in s:
+              raise SystemExit('staging migration marker not found')
+          p.write_text(s.replace(marker, replacement, 1))
+
+          p = Path('internal/drive/upload_test.go')
+          s = p.read_text()
+          old = '''func TestUploaderRejectsNonOpaqueRegisteredCachePath(t *testing.T) {\n\tstore, layout, _, _ := newUploadFixtureWithCachePath(t, "task-badcache", "409", "/bad.bin", []byte("safe"), "cache/other/attacker.bin")\n\tremote := newFakeUploadRemote("root-upload")\n\tif _, err := (&Uploader{Layout: layout, State: store, Remote: remote}).Run(context.Background(), "task-badcache"); err == nil {\n\t\tt.Fatal("expected non-opaque cache path rejection")\n\t}\n\tif len(remote.calls) != 0 {\n\t\tt.Fatalf("bad cache path reached Drive: %v", remote.calls)\n\t}\n}\n'''
+          new = '''func TestLocalReadyStateRejectsNonOpaqueRegisteredCachePath(t *testing.T) {\n\tstore, _, file, _ := newUploadFixture(t, "task-badcache", "409", "/bad.bin", []byte("safe"))\n\tif err := store.MarkLocalReady(context.Background(), file.TaskID, file.FileID, "cache/other/attacker.bin"); err == nil {\n\t\tt.Fatal("expected non-opaque cache path rejection at state boundary")\n\t}\n\tafter, err := store.GetFile(context.Background(), file.TaskID, file.FileID)\n\tif err != nil {\n\t\tt.Fatal(err)\n\t}\n\tif after.LocalCachePath != file.LocalCachePath {\n\t\tt.Fatalf("rejected cache path changed persisted path: %q", after.LocalCachePath)\n\t}\n}\n'''
+          if old not in s:
+              raise SystemExit('upload cache-path regression block not found')
+          p.write_text(s.replace(old, new, 1))
+          PY
+      - name: Normalize and validate cleanup foundation
+        shell: bash
+        run: |
+          set -euo pipefail
+          gofmt -w ./cmd ./internal
+          go test ./... -count=1
+          go vet ./...
+      - name: Commit validated normalization
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add cmd internal
+          if git diff --cached --quiet; then
+            echo 'Nothing to commit.'
+            exit 0
+          fi
+          git commit -m 'test(v0.6): normalize cleanup state regressions'
+          git push origin HEAD:dev/v0.6-full-pipeline
