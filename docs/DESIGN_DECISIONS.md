@@ -64,19 +64,30 @@ Rules:
 
 If reusable stored cookies remain valid, later runs avoid opening Chrome.
 
-## D7. Google Drive transport: rclone first, direct Drive API only if clearly superior
+## D7. Google Drive transport: pinned rclone helper
 
-Decision: begin with rclone as the Drive transport because it already provides mature OAuth, retry, resumable upload, Drive naming behavior, and verification primitives.
+Decision: v0.5 uses rclone as a managed Google Drive transport because it provides mature OAuth, retry/resumable upload behavior, Drive metadata queries and hash support while allowing the project to keep orchestration and state ownership in Go.
 
-Packaging target:
+Pin for v0.5:
 
-- pin an rclone version;
-- release CI obtains/verifies the pinned binary;
-- the user-facing package remains one entry executable;
-- helper/config/cache material is placed only under `temp/tools/` and `temp/auth/`;
-- every rclone invocation explicitly supplies config/cache paths under `temp/`.
+- `rclone v1.74.4`;
+- Windows amd64 archive `rclone-v1.74.4-windows-amd64.zip`;
+- SHA-256 `ef097ef9de37a57feb7d9f9c7afb34148ad3c65be8025f1d8f7f521554a701ea`.
 
-If rclone cannot meet the runtime-write boundary or single-entry UX after testing, replace it with direct Google Drive API integration before v0.5.0. This change requires updating this decision first.
+Rules:
+
+- never silently track `latest`;
+- verify the archive SHA-256 before extraction or execution;
+- reject archive traversal and extract only the expected helper executable;
+- verify the helper-reported version before production use;
+- helper executable lives only under `temp/tools/rclone/`;
+- configuration lives only under `temp/auth/rclone.conf`;
+- every rclone invocation explicitly sets `--config`, `--cache-dir`, and `--temp-dir` to paths under `temp/`;
+- Windows child `TMP` and `TEMP` are redirected under `temp/`;
+- invoke directly with an argument vector, never through a shell;
+- ordinary CI uses a fake process runner rather than real OAuth or real Drive credentials.
+
+If rclone cannot satisfy these runtime-path, least-privilege, or single-entry UX constraints during v0.5 acceptance, direct Google Drive API integration may replace it only after this decision is updated.
 
 ## D8. SQLite: pure-Go driver
 
@@ -103,9 +114,11 @@ Logical path and destination name remain database metadata.
 
 Decision: every migration task creates one new Drive root folder. Until the task completes, the user should treat that folder as tool-managed and not manually rename/move its contents.
 
-After completion, the user may move the task root folder anywhere in Drive.
+The base OAuth permission is `drive.file`, so the tool deliberately does not browse or mutate unrelated existing Drive content. The initial task root is created by the tool itself, its Drive folder ID is persisted, and all later task operations are scoped to that ID.
 
-This avoids unnecessary mid-transfer destination reconciliation complexity in v1.0.
+After completion, the user may move or rename the task root folder normally.
+
+This avoids unnecessary mid-transfer destination reconciliation complexity in v1.0 and gives Drive operations a remote-side sandbox.
 
 ## D11. Conservative default concurrency
 
@@ -113,7 +126,7 @@ Decision:
 
 - Baidu download concurrency starts conservative (normally one active download stream for free accounts unless validated otherwise);
 - Baidu transfer batches are below the hard service limit, not exactly at it;
-- Drive may use higher bounded upload concurrency;
+- Drive may use higher bounded upload concurrency in later milestones, but v0.5 begins with one active upload;
 - all concurrency values remain configurable internally and protected by backpressure.
 
 Correctness and account stability take priority over benchmark speed.
@@ -132,7 +145,7 @@ Updates are explicit new releases downloaded/replaced by the user.
 
 ## D14. CI is mock-first
 
-Decision: ordinary CI must be deterministic and credential-free. Service behavior is modeled by fixtures/fake HTTP servers.
+Decision: ordinary CI must be deterministic and credential-free. Service behavior is modeled by fixtures/fake HTTP servers and fake process runners.
 
 Live Baidu/Drive acceptance testing is a separate controlled step and never required for untrusted pull requests.
 
@@ -165,3 +178,29 @@ Rules:
 - transfer-limit/partial failures are reconciled against the isolated batch directory, then only missing files are split/retried;
 - a batch directory is registered in `owned_objects` before remote creation;
 - automatic cleanup remains disabled until downstream Drive verification grants cleanup eligibility.
+
+## D17. Google Drive uses least privilege and task-root ID scoping
+
+Decision: Google OAuth explicitly requests `drive.file`, not rclone's broader default Drive scope.
+
+Each task creates a new tool-owned Drive root such as `BaiduDriveMover-<task-id>`. After creation, the folder ID is observed and persisted. Every later rclone operation for that task must include the persisted `--drive-root-folder-id` so the rclone backend itself is rooted at the task folder.
+
+Consequences:
+
+- the tool does not need visibility into unrelated Drive files;
+- user-selected pre-existing destination folders are intentionally out of scope for v0.5/v1.0 normal operation;
+- task paths cannot intentionally address Drive objects above the task root;
+- Drive `delete`, `purge`, and destination-wide `sync` are not part of v0.5 production behavior.
+
+## D18. Drive verification is independent from upload success
+
+Decision: a successful upload process exit is insufficient for completion.
+
+For each uploaded file the application independently queries Drive metadata and requires:
+
+- one unambiguous destination object;
+- non-empty Drive object ID;
+- exact size equality;
+- MD5 equality against a hash computed from the verified local cache file.
+
+Only then may the state advance to `DRIVE_VERIFIED`. If destination evidence is missing, ambiguous, or contradictory, the task remains incomplete and cleanup remains forbidden.

@@ -25,6 +25,11 @@ type Layout struct {
 	Logs          string
 	Tasks         string
 	Tools         string
+	RcloneCache   string
+	RcloneTemp    string
+	RcloneToolDir string
+	RcloneExe     string
+	RcloneConfig  string
 }
 
 // FromExecutable builds the runtime layout beside the running executable.
@@ -51,19 +56,27 @@ func New(base string) (*Layout, error) {
 	}
 	abs = filepath.Clean(abs)
 	temp := filepath.Join(abs, tempDirName)
+	auth := filepath.Join(temp, "auth")
+	tools := filepath.Join(temp, "tools")
+	rcloneToolDir := filepath.Join(tools, "rclone")
 	return &Layout{
 		Base:          abs,
 		Temp:          temp,
 		StateDB:       filepath.Join(temp, "state.db"),
 		Config:        filepath.Join(temp, "config.json"),
-		Auth:          filepath.Join(temp, "auth"),
+		Auth:          auth,
 		ChromeProfile: filepath.Join(temp, "chrome-profile"),
 		BrowserTemp:   filepath.Join(temp, "browser-tmp"),
 		BrowserCache:  filepath.Join(temp, "browser-cache"),
 		Cache:         filepath.Join(temp, "cache"),
 		Logs:          filepath.Join(temp, "logs"),
 		Tasks:         filepath.Join(temp, "tasks"),
-		Tools:         filepath.Join(temp, "tools"),
+		Tools:         tools,
+		RcloneCache:   filepath.Join(temp, "rclone-cache"),
+		RcloneTemp:    filepath.Join(temp, "rclone-tmp"),
+		RcloneToolDir: rcloneToolDir,
+		RcloneExe:     filepath.Join(rcloneToolDir, "rclone.exe"),
+		RcloneConfig:  filepath.Join(auth, "rclone.conf"),
 	}, nil
 }
 
@@ -75,7 +88,10 @@ func (l *Layout) Ensure() error {
 	if err := l.validateTempLocation(); err != nil {
 		return err
 	}
-	for _, dir := range []string{l.Temp, l.Auth, l.ChromeProfile, l.BrowserTemp, l.BrowserCache, l.Cache, l.Logs, l.Tasks, l.Tools} {
+	for _, dir := range []string{
+		l.Temp, l.Auth, l.ChromeProfile, l.BrowserTemp, l.BrowserCache,
+		l.Cache, l.Logs, l.Tasks, l.Tools, l.RcloneCache, l.RcloneTemp, l.RcloneToolDir,
+	} {
 		if err := mkdirContained(l.Temp, dir); err != nil {
 			return err
 		}

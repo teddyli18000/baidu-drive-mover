@@ -161,7 +161,7 @@ func TestStagingBatchStateRoundTrip(t *testing.T) {
 	}
 }
 
-func TestMigrationFromSchemaV1ToV2(t *testing.T) {
+func TestMigrationFromSchemaV1ToLatest(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "state.db")
 	db, err := sql.Open("sqlite", path)
 	if err != nil {
@@ -196,14 +196,17 @@ func TestMigrationFromSchemaV1ToV2(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if version != 2 {
-		t.Fatalf("schema=%d want=2", version)
+	if version != 3 {
+		t.Fatalf("schema=%d want=3", version)
 	}
 	if _, err := store.db.Exec(`SELECT baidu_staging_path FROM batches LIMIT 1`); err != nil {
 		t.Fatalf("missing v2 batches column: %v", err)
 	}
 	if _, err := store.db.Exec(`SELECT task_id, batch_id, file_id, ordinal FROM batch_files LIMIT 1`); err != nil {
 		t.Fatalf("missing batch_files table: %v", err)
+	}
+	if _, err := store.db.Exec(`SELECT drive_root_name FROM tasks LIMIT 1`); err != nil {
+		t.Fatalf("missing v3 task Drive root name column: %v", err)
 	}
 }
 

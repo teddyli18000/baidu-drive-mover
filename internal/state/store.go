@@ -10,7 +10,7 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-const schemaVersion = 2
+const schemaVersion = 3
 
 type Store struct {
 	db *sql.DB
@@ -90,6 +90,15 @@ CREATE TABLE IF NOT EXISTS schema_migrations (
 			return err
 		}
 		if err := recordMigration(ctx, tx, 2); err != nil {
+			return err
+		}
+		current = 2
+	}
+	if current < 3 {
+		if err := migrationV3(ctx, tx); err != nil {
+			return err
+		}
+		if err := recordMigration(ctx, tx, 3); err != nil {
 			return err
 		}
 	}
@@ -205,6 +214,19 @@ func migrationV2(ctx context.Context, tx *sql.Tx) error {
 	return nil
 }
 
+func migrationV3(ctx context.Context, tx *sql.Tx) error {
+	statements := []string{
+		`ALTER TABLE tasks ADD COLUMN drive_root_name TEXT NOT NULL DEFAULT '';`,
+		`CREATE INDEX idx_directories_task_path ON directories(task_id, logical_path);`,
+	}
+	for _, stmt := range statements {
+		if _, err := tx.ExecContext(ctx, stmt); err != nil {
+			return fmt.Errorf("apply schema v3: %w", err)
+		}
+	}
+	return nil
+}
+
 func (s *Store) CreateTask(ctx context.Context, task Task) error {
 	if task.ID == "" || task.ShareURL == "" {
 		return errors.New("task ID and share URL are required")
@@ -214,8 +236,8 @@ func (s *Store) CreateTask(ctx context.Context, task Task) error {
 		task.Status = TaskNew
 	}
 	_, err := s.db.ExecContext(ctx, `
-INSERT INTO tasks(id, share_url, extraction_code, status, drive_root_id, last_error, created_at, updated_at)
-VALUES(?, ?, ?, ?, ?, ?, ?, ?)`, task.ID, task.ShareURL, task.ExtractionCode, task.Status, task.DriveRootID, task.LastError, now.Format(time.RFC3339Nano), now.Format(time.RFC3339Nano))
+INSERT INTO tasks(id, share_url, extraction_code, status, drive_root_id, drive_root_name, last_error, created_at, updated_at)
+VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)`, task.ID, task.ShareURL, task.ExtractionCode, task.Status, task.DriveRootID, task.DriveRootName, task.LastError, now.Format(time.RFC3339Nano), now.Format(time.RFC3339Nano))
 	if err != nil {
 		return fmt.Errorf("create task: %w", err)
 	}
@@ -226,8 +248,8 @@ func (s *Store) GetTask(ctx context.Context, id string) (Task, error) {
 	var task Task
 	var created, updated string
 	err := s.db.QueryRowContext(ctx, `
-SELECT id, share_url, extraction_code, status, drive_root_id, last_error, created_at, updated_at
-FROM tasks WHERE id = ?`, id).Scan(&task.ID, &task.ShareURL, &task.ExtractionCode, &task.Status, &task.DriveRootID, &task.LastError, &created, &updated)
+SELECT id, share_url, extraction_code, status, drive_root_id, drive_root_name, last_error, created_at, updated_at
+FROM tasks WHERE id = ?`, id).Scan(&task.ID, &task.ShareURL, &task.ExtractionCode, &task.Status, &task.DriveRootID, &task.DriveRootName, &task.LastError, &created, &updated)
 	if err != nil {
 		return Task{}, err
 	}
