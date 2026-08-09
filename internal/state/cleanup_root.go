@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"path"
-	"time"
 )
 
 func expectedBaiduTaskRootPath(taskID string) (string, error) {
@@ -119,5 +118,3 @@ WHERE task_id = ? AND scope = ? AND object_id = ?`, taskID, ownedScopeBaiduTaskR
 	}
 	return count > 0, cleanedAt != "", nil
 }
-
-var _ = time.RFC3339Nano
