@@ -163,10 +163,14 @@ func installVerifiedArchive(layout *runtimepath.Layout, data []byte, expectedArc
 		_ = layout.RemoveTempFile("tools/rclone/rclone.exe.new")
 		return err
 	}
-	return VerifyInstalledExecutable(layout)
+	return verifyInstalledExecutableHash(layout, expectedExeHash)
 }
 
 func VerifyInstalledExecutable(layout *runtimepath.Layout) error {
+	return verifyInstalledExecutableHash(layout, ExecutableSHA256)
+}
+
+func verifyInstalledExecutableHash(layout *runtimepath.Layout, expectedHash string) error {
 	if layout == nil {
 		return fmt.Errorf("runtime layout is nil")
 	}
@@ -175,7 +179,8 @@ func VerifyInstalledExecutable(layout *runtimepath.Layout) error {
 		return fmt.Errorf("open installed rclone helper: %w", err)
 	}
 	hash := sha256.New()
-	_, copyErr := io.Copy(hash, io.LimitReader(file, maxExecutableBytes+1))
+	limited := io.LimitReader(file, maxExecutableBytes+1)
+	written, copyErr := io.Copy(hash, limited)
 	closeErr := file.Close()
 	if copyErr != nil {
 		return fmt.Errorf("hash installed rclone helper: %w", copyErr)
@@ -183,8 +188,11 @@ func VerifyInstalledExecutable(layout *runtimepath.Layout) error {
 	if closeErr != nil {
 		return fmt.Errorf("close installed rclone helper: %w", closeErr)
 	}
+	if written > maxExecutableBytes {
+		return fmt.Errorf("installed rclone executable exceeds size limit")
+	}
 	actual := hex.EncodeToString(hash.Sum(nil))
-	if !strings.EqualFold(actual, ExecutableSHA256) {
+	if !strings.EqualFold(actual, expectedHash) {
 		return fmt.Errorf("installed rclone executable SHA-256 mismatch: got %s", actual)
 	}
 	return nil
