@@ -3,6 +3,7 @@ name: Foundation Bootstrap
 on:
   push:
     branches: [dev/v0.1-foundation]
+  workflow_dispatch:
 
 permissions:
   contents: write
