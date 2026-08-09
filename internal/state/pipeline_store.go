@@ -6,22 +6,22 @@ import (
 )
 
 type PipelineProgress struct {
-	Total            int
-	Discovered       int
-	Planned          int
-	BaiduStaging     int
-	BaiduStaged      int
-	Downloading      int
-	LocalReady       int
-	DriveUploading   int
-	DriveUploaded    int
-	DriveVerified    int
-	CleanupPending   int
-	Done             int
-	FailedRetryable  int
-	FailedPermanent  int
-	ReservedCache    int64
-	DriveRootReady   bool
+	Total           int
+	Discovered      int
+	Planned         int
+	BaiduStaging    int
+	BaiduStaged     int
+	Downloading     int
+	LocalReady      int
+	DriveUploading  int
+	DriveUploaded   int
+	DriveVerified   int
+	CleanupPending  int
+	Done            int
+	FailedRetryable int
+	FailedPermanent int
+	ReservedCache   int64
+	DriveRootReady  bool
 }
 
 func (p PipelineProgress) Complete() bool {
@@ -40,7 +40,7 @@ func (p PipelineProgress) HasDownloadWork() bool {
 }
 
 func (p PipelineProgress) HasStageWork() bool {
-	return p.Discovered+p.Planned+p.BaiduStaging+ p.FailedRetryable > 0
+	return p.Discovered+p.Planned+p.BaiduStaging > 0
 }
 
 func (p PipelineProgress) HasCleanupWork() bool {
