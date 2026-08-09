@@ -81,15 +81,15 @@ func TestBaseCommandCannotSmuggleSandboxOrRootOverrides(t *testing.T) {
 	}
 }
 
-func TestDangerousRcloneCommandsAreNotExposed(t *testing.T) {
+func TestDangerousAndGenericConfigCommandsAreNotExposed(t *testing.T) {
 	layout := testClientLayout(t)
 	runner := &captureRunner{}
 	client, err := NewClient(layout, runner)
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, command := range []string{"sync", "move", "moveto", "delete", "purge", "cleanup", "rmdir", "rmdirs"} {
-		if _, err := client.RunBase(context.Background(), command, "bdm-drive:anywhere"); err == nil {
+	for _, command := range []string{"config", "version", "sync", "move", "moveto", "delete", "purge", "cleanup", "rmdir", "rmdirs"} {
+		if _, err := client.RunBase(context.Background(), command, "show"); err == nil {
 			t.Fatalf("base command %q unexpectedly allowed", command)
 		}
 		if _, err := client.RunTask(context.Background(), "root-1", command, "bdm-drive:anywhere"); err == nil {
@@ -97,7 +97,7 @@ func TestDangerousRcloneCommandsAreNotExposed(t *testing.T) {
 		}
 	}
 	if len(runner.calls) != 0 {
-		t.Fatal("dangerous command reached process runner")
+		t.Fatal("forbidden command reached process runner")
 	}
 }
 
@@ -144,6 +144,29 @@ func TestMergeEnvironmentReplacesTempCaseInsensitively(t *testing.T) {
 	if countTemp != 1 {
 		t.Fatalf("TEMP entries=%d want=1: %v", countTemp, merged)
 	}
+}
+
+func TestSandboxEnvironmentStripsInheritedRcloneOverrides(t *testing.T) {
+	base := []string{
+		"Path=X",
+		"RCLONE_CONFIG=C:\\outside.conf",
+		"rclone_drive_scope=drive",
+		"RCLONE_CONFIG_BDM_DRIVE_TYPE=local",
+		"HTTPS_PROXY=http://proxy.example",
+	}
+	got := sandboxEnvironment(base, []string{
+		"TEMP=C:\\inside",
+		"TMP=C:\\inside",
+		"RCLONE_CONFIG=C:\\still-outside.conf",
+	})
+	for _, item := range got {
+		if strings.HasPrefix(strings.ToUpper(envKey(item)), "RCLONE_") {
+			t.Fatalf("inherited rclone override survived sandbox: %q", item)
+		}
+	}
+	assertEnvValue(t, got, "TEMP", `C:\inside`)
+	assertEnvValue(t, got, "TMP", `C:\inside`)
+	assertEnvValue(t, got, "HTTPS_PROXY", "http://proxy.example")
 }
 
 func testClientLayout(t *testing.T) *runtimepath.Layout {
