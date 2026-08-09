@@ -1,0 +1,134 @@
+name: v0.5 final rclone contract gate
+
+on:
+  push:
+    branches: [dev/v0.5-google-drive]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  finalize:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: windows-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: dev/v0.5-google-drive
+          fetch-depth: 0
+      - uses: actions/setup-go@v7
+        with:
+          go-version: '1.26.5'
+          cache: true
+      - name: Verify and execute exact pinned helper
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $url = 'https://downloads.rclone.org/v1.74.4/rclone-v1.74.4-windows-amd64.zip'
+          Invoke-WebRequest -Uri $url -OutFile rclone.zip -MaximumRedirection 5
+          $archiveExpected = 'ef097ef9de37a57feb7d9f9c7afb34148ad3c65be8025f1d8f7f521554a701ea'
+          $archiveActual = (Get-FileHash rclone.zip -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($archiveActual -ne $archiveExpected) { throw "archive hash mismatch: $archiveActual" }
+          Expand-Archive -Path rclone.zip -DestinationPath unpack
+          $exe = Join-Path $PWD 'unpack/rclone-v1.74.4-windows-amd64/rclone.exe'
+          if (-not (Test-Path -LiteralPath $exe -PathType Leaf)) { throw 'expected rclone.exe missing' }
+          $exeExpected = '492648a3867dbc620188a305e05ff3216aecbf4622bf1a6b5b978ed9c939e18c'
+          $exeActual = (Get-FileHash -LiteralPath $exe -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($exeActual -ne $exeExpected) { throw "executable hash mismatch: $exeActual" }
+          $output = & $exe version
+          if ($LASTEXITCODE -ne 0) { throw "rclone version exited $LASTEXITCODE" }
+          $first = ($output | Select-Object -First 1).Trim()
+          if ($first -ne 'rclone v1.74.4') { throw "unexpected version: $first" }
+          Write-Host $first
+      - name: Sync latest branch and apply final CLI-contract fix
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          git fetch origin dev/v0.5-google-drive
+          git reset --hard origin/dev/v0.5-google-drive
+          @'
+          from pathlib import Path
+
+          auth = Path('internal/drive/rclone/auth.go')
+          text = auth.read_text(encoding='utf-8')
+          old = 'result, err := c.RunBase(ctx, "listremotes", "--name", RemoteName, "--exact")'
+          new = 'result, err := c.RunBase(ctx, "listremotes")'
+          if old in text:
+              text = text.replace(old, new, 1)
+              auth.write_text(text, encoding='utf-8')
+          elif new not in text:
+              raise SystemExit('expected listremotes call shape not found')
+
+          test = Path('internal/drive/rclone/listremotes_contract_test.go')
+          test.write_text(r'''package rclone
+
+import (
+    "context"
+    "testing"
+)
+
+func TestDriveRemoteListedUsesNativeListremotesWithoutUnsupportedFilters(t *testing.T) {
+    layout := testClientLayout(t)
+    runner := &captureRunner{result: Result{Stdout: RemoteName + ":\\n"}}
+    client, err := NewClient(layout, runner)
+    if err != nil {
+        t.Fatal(err)
+    }
+    found, err := client.driveRemoteListed(context.Background())
+    if err != nil {
+        t.Fatal(err)
+    }
+    if !found {
+        t.Fatal("expected tool remote")
+    }
+    if len(runner.calls) != 1 {
+        t.Fatalf("calls=%d want=1", len(runner.calls))
+    }
+    got := runner.calls[0].Args
+    if len(got) < 7 || got[0] != "listremotes" {
+        t.Fatalf("unexpected argv: %v", got)
+    }
+    for _, arg := range got[1:] {
+        if arg == "--name" || arg == "--exact" {
+            t.Fatalf("unsupported listremotes filter reached rclone: %v", got)
+        }
+    }
+}
+''', encoding='utf-8')
+
+          doc = Path('docs/RCLONE_PIN.md')
+          marker = 'Windows acceptance: official pinned archive and executable hashes verified, and rclone v1.74.4 executed successfully on windows-latest in credential-free CI on 2026-08-09.'
+          d = doc.read_text(encoding='utf-8')
+          if marker not in d:
+              doc.write_text(d.rstrip() + '\n\n' + marker + '\n', encoding='utf-8')
+          '@ | python -
+          foreach ($wf in @(
+            '.github/workflows/v05-rclone-windows-acceptance.yml',
+            '.github/workflows/v05-rclone-windows-acceptance-final.yml',
+            '.github/workflows/v05-final-contract-fix.yml'
+          )) {
+            if (Test-Path -LiteralPath $wf) { git rm -f -- $wf }
+          }
+      - name: Final credential-free validation
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          gofmt -w ./cmd ./internal
+          go mod tidy
+          go test ./... -count=1
+          go vet ./...
+          if (Select-String -Path internal/drive/rclone/auth.go -SimpleMatch '"listremotes", "--name"' -Quiet) {
+            throw 'unsupported listremotes filters remain'
+          }
+      - name: Commit finalization
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          if (git diff --cached --quiet) { throw 'finalizer produced no changes' }
+          git commit -m 'ci(v0.5): record Windows helper acceptance and finalize rclone contract'
+          git push origin HEAD:dev/v0.5-google-drive
