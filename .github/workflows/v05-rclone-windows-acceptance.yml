@@ -1,8 +1,7 @@
 name: v0.5 rclone Windows acceptance
 
 on:
-  push:
-    branches: [dev/v0.5-google-drive]
+  pull_request:
   workflow_dispatch:
 
 permissions:
