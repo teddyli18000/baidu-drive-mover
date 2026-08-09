@@ -25,13 +25,15 @@ type StagingBaiduAPI interface {
 type StageClientFactory func(cookieHeader string) (StagingBaiduAPI, error)
 
 type StageRunner struct {
-	Store       *state.Store
-	Browser     BrowserLogin
-	NewClient   StageClientFactory
-	CookieStore baidu.CookieStore
-	Output      io.Writer
-	Logger      *slog.Logger
-	BatchSize   int
+	Store         *state.Store
+	Browser       BrowserLogin
+	NewClient     StageClientFactory
+	CookieStore   baidu.CookieStore
+	Output        io.Writer
+	Logger        *slog.Logger
+	BatchSize     int
+	MaxBatches    int
+	MaxBatchBytes int64
 }
 
 type StageSummary struct {
@@ -54,9 +56,27 @@ func (r *StageRunner) Run(ctx context.Context, taskID string) (StageSummary, err
 	if batchSize <= 0 {
 		batchSize = defaultStagingBatchSize
 	}
-	if _, err := r.Store.PlanBatches(ctx, taskID, batchSize); err != nil {
+	if _, err := r.Store.PlanBatchesBounded(ctx, taskID, batchSize, r.MaxBatchBytes); err != nil {
 		return StageSummary{}, err
 	}
+
+	pending, err := r.Store.StagingBatches(ctx, taskID)
+	if err != nil {
+		return StageSummary{}, err
+	}
+	checkCount := len(pending)
+	if r.MaxBatches > 0 && checkCount > r.MaxBatches {
+		checkCount = r.MaxBatches
+	}
+	for i := 0; i < checkCount; i++ {
+		batch := pending[i]
+		if r.MaxBatchBytes > 0 && batch.TotalBytes > r.MaxBatchBytes {
+			err := &StagingBatchTooLargeError{BatchID: batch.BatchID, Bytes: batch.TotalBytes, Limit: r.MaxBatchBytes}
+			_ = r.Store.UpdateTaskStatus(context.Background(), taskID, state.TaskBlocked, safeError(err))
+			return StageSummary{}, err
+		}
+	}
+
 	if err := r.Store.UpdateTaskStatus(ctx, taskID, state.TaskRunning, ""); err != nil {
 		return StageSummary{}, err
 	}
@@ -77,6 +97,7 @@ func (r *StageRunner) Run(ctx context.Context, taskID string) (StageSummary, err
 			Remote:     api,
 			Link:       link,
 			Share:      share,
+			MaxBatches: r.MaxBatches,
 		}
 		runErr = executor.Run(ctx, taskID)
 		if errors.Is(runErr, baidu.ErrAuthRequired) && sessionAttempt == 0 {
@@ -104,7 +125,7 @@ func (r *StageRunner) Run(ctx context.Context, taskID string) (StageSummary, err
 		return StageSummary{}, err
 	}
 	if r.Logger != nil {
-		r.Logger.Info("Baidu staging completed", "task_id", taskID, "files_staged", staged)
+		r.Logger.Info("bounded Baidu staging pass completed", "task_id", taskID, "files_staged", staged, "max_batches", r.MaxBatches, "max_batch_bytes", r.MaxBatchBytes)
 	}
 	return StageSummary{FilesStaged: staged}, nil
 }
