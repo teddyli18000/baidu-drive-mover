@@ -1,0 +1,222 @@
+package runtime
+
+import (
+	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
+)
+
+const tempDirName = "temp"
+
+// Layout owns every persistent/runtime path used by BaiduDriveMover.
+// Nothing outside Temp is writable by the application.
+type Layout struct {
+	Base          string
+	Temp          string
+	StateDB       string
+	Config        string
+	Auth          string
+	ChromeProfile string
+	Cache         string
+	Logs          string
+	Tasks         string
+	Tools         string
+}
+
+// FromExecutable builds the runtime layout beside the running executable.
+func FromExecutable() (*Layout, error) {
+	exe, err := os.Executable()
+	if err != nil {
+		return nil, fmt.Errorf("resolve executable path: %w", err)
+	}
+	exe, err = filepath.Abs(exe)
+	if err != nil {
+		return nil, fmt.Errorf("normalize executable path: %w", err)
+	}
+	return New(filepath.Dir(exe))
+}
+
+// New builds a layout rooted at base. It is primarily useful for tests.
+func New(base string) (*Layout, error) {
+	if strings.TrimSpace(base) == "" {
+		return nil, errors.New("runtime base path is empty")
+	}
+	abs, err := filepath.Abs(base)
+	if err != nil {
+		return nil, fmt.Errorf("normalize runtime base: %w", err)
+	}
+	abs = filepath.Clean(abs)
+	temp := filepath.Join(abs, tempDirName)
+	return &Layout{
+		Base:          abs,
+		Temp:          temp,
+		StateDB:       filepath.Join(temp, "state.db"),
+		Config:        filepath.Join(temp, "config.json"),
+		Auth:          filepath.Join(temp, "auth"),
+		ChromeProfile: filepath.Join(temp, "chrome-profile"),
+		Cache:         filepath.Join(temp, "cache"),
+		Logs:          filepath.Join(temp, "logs"),
+		Tasks:         filepath.Join(temp, "tasks"),
+		Tools:         filepath.Join(temp, "tools"),
+	}, nil
+}
+
+// Ensure creates only the approved runtime directories below ./temp.
+func (l *Layout) Ensure() error {
+	if l == nil {
+		return errors.New("nil runtime layout")
+	}
+	if err := l.validateTempLocation(); err != nil {
+		return err
+	}
+	for _, dir := range []string{l.Temp, l.Auth, l.ChromeProfile, l.Cache, l.Logs, l.Tasks, l.Tools} {
+		if err := mkdirContained(l.Temp, dir); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (l *Layout) validateTempLocation() error {
+	expected := filepath.Clean(filepath.Join(l.Base, tempDirName))
+	if !samePath(expected, filepath.Clean(l.Temp)) {
+		return fmt.Errorf("runtime temp path must be %q, got %q", expected, l.Temp)
+	}
+	return nil
+}
+
+// JoinTemp returns a path below temp and rejects traversal or absolute escapes.
+func (l *Layout) JoinTemp(parts ...string) (string, error) {
+	if l == nil {
+		return "", errors.New("nil runtime layout")
+	}
+	candidate := l.Temp
+	for _, part := range parts {
+		if part == "" {
+			continue
+		}
+		if filepath.IsAbs(part) {
+			return "", fmt.Errorf("absolute path component is not allowed: %q", part)
+		}
+		candidate = filepath.Join(candidate, part)
+	}
+	candidate = filepath.Clean(candidate)
+	if !isWithin(l.Temp, candidate, true) {
+		return "", fmt.Errorf("path escapes runtime temp root: %q", candidate)
+	}
+	if err := rejectExistingSymlinks(l.Temp, candidate); err != nil {
+		return "", err
+	}
+	return candidate, nil
+}
+
+// SafeRemoveAll removes a registered temp descendant. It refuses to delete
+// the temp root itself and rejects symlink-based escapes.
+func (l *Layout) SafeRemoveAll(target string) error {
+	if l == nil {
+		return errors.New("nil runtime layout")
+	}
+	target, err := filepath.Abs(target)
+	if err != nil {
+		return fmt.Errorf("normalize delete target: %w", err)
+	}
+	target = filepath.Clean(target)
+	if samePath(target, l.Temp) || !isWithin(l.Temp, target, false) {
+		return fmt.Errorf("refusing to delete path outside temp descendants: %q", target)
+	}
+	if err := rejectExistingSymlinks(l.Temp, target); err != nil {
+		return err
+	}
+	return os.RemoveAll(target)
+}
+
+func mkdirContained(root, dir string) error {
+	if !isWithin(root, dir, true) {
+		return fmt.Errorf("directory escapes runtime temp root: %q", dir)
+	}
+	if err := rejectExistingSymlinks(root, dir); err != nil {
+		return err
+	}
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return fmt.Errorf("create runtime directory %q: %w", dir, err)
+	}
+	return nil
+}
+
+func isWithin(root, target string, allowRoot bool) bool {
+	rootAbs, err := filepath.Abs(root)
+	if err != nil {
+		return false
+	}
+	targetAbs, err := filepath.Abs(target)
+	if err != nil {
+		return false
+	}
+	rootAbs = filepath.Clean(rootAbs)
+	targetAbs = filepath.Clean(targetAbs)
+	if samePath(rootAbs, targetAbs) {
+		return allowRoot
+	}
+	rel, err := filepath.Rel(rootAbs, targetAbs)
+	if err != nil {
+		return false
+	}
+	if rel == "." {
+		return allowRoot
+	}
+	return rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) && !filepath.IsAbs(rel)
+}
+
+func rejectExistingSymlinks(root, target string) error {
+	rootAbs, err := filepath.Abs(root)
+	if err != nil {
+		return err
+	}
+	targetAbs, err := filepath.Abs(target)
+	if err != nil {
+		return err
+	}
+	if !isWithin(rootAbs, targetAbs, true) {
+		return fmt.Errorf("path escapes runtime temp root: %q", targetAbs)
+	}
+
+	if info, err := os.Lstat(rootAbs); err == nil {
+		if info.Mode()&os.ModeSymlink != 0 {
+			return fmt.Errorf("runtime temp root is a symlink: %q", rootAbs)
+		}
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("inspect runtime temp root: %w", err)
+	}
+
+	rel, err := filepath.Rel(rootAbs, targetAbs)
+	if err != nil || rel == "." {
+		return err
+	}
+	current := rootAbs
+	for _, component := range strings.Split(rel, string(filepath.Separator)) {
+		if component == "" || component == "." {
+			continue
+		}
+		current = filepath.Join(current, component)
+		info, statErr := os.Lstat(current)
+		if errors.Is(statErr, os.ErrNotExist) {
+			break
+		}
+		if statErr != nil {
+			return fmt.Errorf("inspect runtime path %q: %w", current, statErr)
+		}
+		if info.Mode()&os.ModeSymlink != 0 {
+			return fmt.Errorf("symlink is not allowed in runtime path: %q", current)
+		}
+	}
+	return nil
+}
+
+func samePath(a, b string) bool {
+	if os.PathSeparator == '\\' {
+		return strings.EqualFold(filepath.Clean(a), filepath.Clean(b))
+	}
+	return filepath.Clean(a) == filepath.Clean(b)
+}

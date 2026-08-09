@@ -26,4 +26,17 @@ Normal use should be:
 - A file is not considered complete until Google Drive verification succeeds.
 - The pipeline must be resumable and idempotent.
 
-See `docs/` for the fixed architecture and implementation plan.
+## Development status
+
+Current milestone: **v0.1.0 Foundation**.
+
+Design is frozen before service integration. See:
+
+- `docs/ARCHITECTURE.md`
+- `docs/IMPLEMENTATION_PLAN.md`
+- `docs/VERSIONING.md`
+- `docs/DESIGN_DECISIONS.md`
+- `docs/SECURITY.md`
+- `docs/TESTING.md`
+
+The public repository must never contain real account cookies/tokens, browser profiles, task databases, private share manifests, logs, or downloaded files.
