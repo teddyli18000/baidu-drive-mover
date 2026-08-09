@@ -2,7 +2,10 @@ package state
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
+	"path"
+	"strings"
 	"time"
 
 	"github.com/teddyli18000/baidu-drive-mover/internal/manifest"
@@ -16,42 +19,108 @@ func (s *Store) UpsertManifestPage(ctx context.Context, taskID string, directori
 	defer tx.Rollback()
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	for _, directory := range directories {
-		if directory.LogicalPath == "" {
-			return fmt.Errorf("manifest directory path is empty")
+		logicalPath, err := validateManifestPath(directory.LogicalPath, false)
+		if err != nil {
+			return fmt.Errorf("invalid manifest directory %q: %w", directory.LogicalPath, err)
 		}
-		_, err := tx.ExecContext(ctx, `
+		var conflictingFileID string
+		err = tx.QueryRowContext(ctx, `
+SELECT file_id FROM files WHERE task_id = ? AND logical_path = ?`, taskID, logicalPath).Scan(&conflictingFileID)
+		if err == nil {
+			return fmt.Errorf("manifest logical path %q is already a file (%s)", logicalPath, conflictingFileID)
+		}
+		if err != nil && err != sql.ErrNoRows {
+			return fmt.Errorf("check manifest directory collision %q: %w", logicalPath, err)
+		}
+		_, err = tx.ExecContext(ctx, `
 INSERT INTO directories(task_id, logical_path, drive_id, created_at, updated_at)
 VALUES(?, ?, '', ?, ?)
-ON CONFLICT(task_id, logical_path) DO UPDATE SET updated_at = excluded.updated_at`, taskID, directory.LogicalPath, now, now)
+ON CONFLICT(task_id, logical_path) DO UPDATE SET updated_at = excluded.updated_at`, taskID, logicalPath, now, now)
 		if err != nil {
-			return fmt.Errorf("upsert manifest directory %q: %w", directory.LogicalPath, err)
+			return fmt.Errorf("upsert manifest directory %q: %w", logicalPath, err)
 		}
 	}
 	for _, file := range files {
-		if file.SourceID == "" || file.LogicalPath == "" || file.Name == "" || file.Size < 0 {
+		logicalPath, err := validateManifestPath(file.LogicalPath, false)
+		if err != nil {
+			return fmt.Errorf("invalid manifest file path %q: %w", file.LogicalPath, err)
+		}
+		parentPath, err := validateManifestPath(file.ParentPath, true)
+		if err != nil {
+			return fmt.Errorf("invalid manifest parent path %q: %w", file.ParentPath, err)
+		}
+		if file.SourceID == "" || file.Name == "" || file.Size < 0 {
 			return fmt.Errorf("invalid manifest file at %q", file.LogicalPath)
 		}
-		_, err := tx.ExecContext(ctx, `
+		if path.Dir(logicalPath) != parentPath || path.Base(logicalPath) != file.Name {
+			return fmt.Errorf("manifest file metadata is inconsistent at %q", logicalPath)
+		}
+		var directoryMarker string
+		err = tx.QueryRowContext(ctx, `
+SELECT logical_path FROM directories WHERE task_id = ? AND logical_path = ?`, taskID, logicalPath).Scan(&directoryMarker)
+		if err == nil {
+			return fmt.Errorf("manifest logical path %q is already a directory", logicalPath)
+		}
+		if err != nil && err != sql.ErrNoRows {
+			return fmt.Errorf("check manifest file collision %q: %w", logicalPath, err)
+		}
+
+		var existingPath, existingParent, existingName, existingMD5 string
+		var existingSize int64
+		err = tx.QueryRowContext(ctx, `
+SELECT logical_path, parent_path, name, size, md5
+FROM files WHERE task_id = ? AND file_id = ?`, taskID, file.SourceID).Scan(
+			&existingPath, &existingParent, &existingName, &existingSize, &existingMD5,
+		)
+		if err == nil {
+			if existingPath != logicalPath || existingParent != parentPath || existingName != file.Name || existingSize != file.Size {
+				return fmt.Errorf("manifest source ID %q attempted to rebind from %q to %q", file.SourceID, existingPath, logicalPath)
+			}
+			incomingMD5 := strings.TrimSpace(file.MD5)
+			if existingMD5 != "" && incomingMD5 != "" && !strings.EqualFold(existingMD5, incomingMD5) {
+				return fmt.Errorf("manifest source ID %q changed MD5 for %q", file.SourceID, logicalPath)
+			}
+			if _, err := tx.ExecContext(ctx, `
+UPDATE files
+SET md5 = CASE WHEN md5 = '' AND ? != '' THEN ? ELSE md5 END,
+    updated_at = ?
+WHERE task_id = ? AND file_id = ?`, incomingMD5, incomingMD5, now, taskID, file.SourceID); err != nil {
+				return fmt.Errorf("refresh manifest file %q: %w", logicalPath, err)
+			}
+			continue
+		}
+		if err != sql.ErrNoRows {
+			return fmt.Errorf("read existing manifest source ID %q: %w", file.SourceID, err)
+		}
+
+		_, err = tx.ExecContext(ctx, `
 INSERT INTO files(
     task_id, file_id, logical_path, parent_path, name, size, md5, status,
     baidu_staging_path, local_cache_path, drive_id, retry_count, last_error, created_at, updated_at
 )
-VALUES(?, ?, ?, ?, ?, ?, ?, ?, '', '', '', 0, '', ?, ?)
-ON CONFLICT(task_id, file_id) DO UPDATE SET
-    logical_path = excluded.logical_path,
-    parent_path = excluded.parent_path,
-    name = excluded.name,
-    size = excluded.size,
-    md5 = excluded.md5,
-    updated_at = excluded.updated_at`, taskID, file.SourceID, file.LogicalPath, file.ParentPath, file.Name, file.Size, file.MD5, FileDiscovered, now, now)
+VALUES(?, ?, ?, ?, ?, ?, ?, ?, '', '', '', 0, '', ?, ?)`, taskID, file.SourceID, logicalPath, parentPath, file.Name, file.Size, strings.TrimSpace(file.MD5), FileDiscovered, now, now)
 		if err != nil {
-			return fmt.Errorf("upsert manifest file %q: %w", file.LogicalPath, err)
+			return fmt.Errorf("insert manifest file %q: %w", logicalPath, err)
 		}
 	}
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("commit manifest page: %w", err)
 	}
 	return nil
+}
+
+func validateManifestPath(raw string, allowRoot bool) (string, error) {
+	if raw == "" || strings.ContainsRune(raw, '\x00') || !strings.HasPrefix(raw, "/") {
+		return "", fmt.Errorf("path must be an absolute non-empty POSIX path")
+	}
+	clean := path.Clean(raw)
+	if clean != raw {
+		return "", fmt.Errorf("path is not canonical")
+	}
+	if clean == "/" && !allowRoot {
+		return "", fmt.Errorf("root is not a storable manifest object")
+	}
+	return clean, nil
 }
 
 func (s *Store) ManifestStats(ctx context.Context, taskID string) (manifest.Stats, error) {
