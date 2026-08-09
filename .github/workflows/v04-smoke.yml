@@ -1,0 +1,50 @@
+name: v0.4 Smoke Gate
+
+on:
+  push:
+    branches: [dev/v0.4-downloader]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  smoke:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: dev/v0.4-downloader
+      - uses: actions/setup-go@v7
+        with:
+          go-version: '1.26.5'
+          cache: true
+      - name: Assert v0.4 wiring exists
+        run: |
+          grep -q 'Version   = "0.4.0-dev"' internal/version/version.go
+          grep -q 'MaxBatches' internal/app/stage.go
+          grep -q 'MaxBatchBytes' internal/app/stage.go
+          grep -q 'PlanBatchesBounded' internal/app/stage.go
+          grep -q 'DownloadRunner' cmd/baidu-drive-mover/main.go
+          grep -q 'MaxBatches:    1' cmd/baidu-drive-mover/main.go
+          grep -q 'MaxBatchBytes: available' cmd/baidu-drive-mover/main.go
+      - name: Normalize and validate
+        run: |
+          go mod tidy
+          gofmt -w ./cmd ./internal
+          go test ./... -count=1
+          go vet ./...
+      - name: Self-clean and commit normalization
+        run: |
+          rm -f .github/workflows/v04-smoke.yml .github/workflows/v04-finalize.yml
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          if git diff --cached --quiet; then
+            echo 'Nothing to commit.'
+            exit 0
+          fi
+          git commit -m 'chore: pass v0.4 smoke gate'
+          git push origin HEAD:dev/v0.4-downloader
