@@ -42,7 +42,11 @@ func (r *CleanupRunner) Run(ctx context.Context, taskID string) (cleanupengine.S
 	if err != nil {
 		return cleanupengine.Summary{}, err
 	}
-	if len(candidates) == 0 {
+	rootCandidate, err := r.Store.TaskRootCleanupCandidate(ctx, taskID)
+	if err != nil {
+		return cleanupengine.Summary{}, err
+	}
+	if len(candidates) == 0 && !rootCandidate {
 		return cleanupengine.Summary{}, nil
 	}
 	if err := r.Store.UpdateTaskStatus(ctx, taskID, state.TaskRunning, ""); err != nil {
@@ -87,12 +91,13 @@ func (r *CleanupRunner) Run(ctx context.Context, taskID string) (cleanupengine.S
 	if err := r.Store.UpdateTaskStatus(ctx, taskID, state.TaskPaused, ""); err != nil {
 		return summary, err
 	}
-	if r.Logger != nil && summary.BatchesDone > 0 {
+	if r.Logger != nil && (summary.BatchesDone > 0 || summary.TaskRootDone) {
 		r.Logger.Info("tool-owned cleanup pass completed",
 			"task_id", taskID,
 			"batches_done", summary.BatchesDone,
 			"files_done", summary.FilesDone,
 			"bytes_freed", summary.BytesFreed,
+			"task_root_done", summary.TaskRootDone,
 		)
 	}
 	return summary, nil
