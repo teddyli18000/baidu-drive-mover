@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/md5"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -165,7 +166,14 @@ func (u *Uploader) uploadOne(ctx context.Context, rootID string, file state.File
 	return u.verifyPersistedRemote(ctx, rootID, file, localMD5, matches[0].ID)
 }
 
-func (u *Uploader) verifyPersistedRemote(ctx context.Context, rootID string, file state.File, localMD5, expectedID string) (bool, error) {
+func (u *Uploader) verifyPersistedRemote(ctx context.Context, rootID string, file state.File, initialLocalMD5, expectedID string) (bool, error) {
+	_, currentLocalMD5, err := u.verifyLocalCache(file)
+	if err != nil {
+		return false, uploadPermanent(fmt.Errorf("revalidate local cache before Drive verification: %w", err))
+	}
+	if !strings.EqualFold(currentLocalMD5, initialLocalMD5) {
+		return false, uploadPermanent(fmt.Errorf("local cache changed during Drive transfer for %q", file.LogicalPath))
+	}
 	matches, err := u.listNamedFiles(ctx, rootID, file.ParentPath, file.Name)
 	if err != nil {
 		return false, err
@@ -176,7 +184,7 @@ func (u *Uploader) verifyPersistedRemote(ctx context.Context, rootID string, fil
 	if matches[0].ID != expectedID {
 		return false, uploadPermanent(fmt.Errorf("independent Drive verification ID changed for %q", file.LogicalPath))
 	}
-	if err := verifyRemoteFile(matches[0], file.Size, localMD5); err != nil {
+	if err := verifyRemoteFile(matches[0], file.Size, currentLocalMD5); err != nil {
 		return false, uploadPermanent(fmt.Errorf("independent Drive verification failed for %q: %w", file.LogicalPath, err))
 	}
 	if err := u.State.MarkDriveVerified(ctx, file.TaskID, file.FileID, expectedID); err != nil {
@@ -220,7 +228,7 @@ func (u *Uploader) listNamedFiles(ctx context.Context, rootID, logicalParent, na
 
 func parseRemoteItems(raw string) ([]remoteItem, error) {
 	var items []remoteItem
-	if err := jsonUnmarshalStrict([]byte(raw), &items); err != nil {
+	if err := json.Unmarshal([]byte(raw), &items); err != nil {
 		return nil, fmt.Errorf("parse rclone Drive listing: %w", err)
 	}
 	return items, nil
@@ -291,5 +299,9 @@ func (u *Uploader) verifyLocalCache(file state.File) (string, string, error) {
 	if _, err := io.Copy(hash, cacheFile); err != nil {
 		return "", "", fmt.Errorf("hash local cache for %q: %w", file.LogicalPath, err)
 	}
-	return full, hex.EncodeToString(hash.Sum(nil)), nil
+	localMD5 := hex.EncodeToString(hash.Sum(nil))
+	if file.MD5 != "" && !strings.EqualFold(strings.TrimSpace(file.MD5), localMD5) {
+		return "", "", fmt.Errorf("local cache MD5 for %q no longer matches source manifest", file.LogicalPath)
+	}
+	return full, localMD5, nil
 }
