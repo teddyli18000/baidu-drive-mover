@@ -1,0 +1,69 @@
+name: v0.4 Release Gate
+
+on:
+  push:
+    branches: [dev/v0.4-downloader]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: dev/v0.4-downloader
+      - uses: actions/setup-go@v7
+        with:
+          go-version: '1.26.5'
+          cache: true
+      - run: go mod download
+      - shell: pwsh
+        run: |
+          go mod tidy
+          git diff --exit-code -- go.mod go.sum
+      - run: go vet ./...
+      - run: go test ./... -count=1
+      - shell: pwsh
+        run: go build -trimpath -o BaiduDriveMover.exe ./cmd/baidu-drive-mover
+
+  linux-race:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: dev/v0.4-downloader
+      - uses: actions/setup-go@v7
+        with:
+          go-version: '1.26.5'
+          cache: true
+      - run: go mod download
+      - name: Formatting
+        run: |
+          bad=$(gofmt -l ./cmd ./internal)
+          test -z "$bad" || { echo "$bad"; gofmt -d ./cmd ./internal; exit 1; }
+      - run: go test -race ./... -count=1
+
+  seal:
+    needs: [windows, linux-race]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: dev/v0.4-downloader
+      - name: Seal successful gate and self-clean
+        run: |
+          mkdir -p docs/gates
+          printf 'v0.4 Windows/Linux gate passed at %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > docs/gates/v0.4-ci-passed.txt
+          rm -f .github/workflows/v04-release-gate.yml .github/workflows/v04-smoke.yml .github/workflows/v04-finalize.yml
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git commit -m 'ci: seal v0.4 Windows/Linux gate'
+          git push origin HEAD:dev/v0.4-downloader
