@@ -76,8 +76,8 @@ VALUES('task-v2', 'baidu_batch_dir', 'b-1', '/BaiduDriveMover/task-v2/b-1', 0, ?
 	if err != nil {
 		t.Fatal(err)
 	}
-	if version != 3 {
-		t.Fatalf("schema=%d want=3", version)
+	if version != 4 {
+		t.Fatalf("schema=%d want=4", version)
 	}
 	task, err := store.GetTask(ctx, "task-v2")
 	if err != nil {
@@ -94,13 +94,14 @@ VALUES('task-v2', 'baidu_batch_dir', 'b-1', '/BaiduDriveMover/task-v2/b-1', 0, ?
 		t.Fatalf("v2 file recovery state was not preserved: %+v", file)
 	}
 	var cleanupAllowed int
+	var cleanedAt, cleanupError string
 	if err := store.db.QueryRowContext(ctx, `
-SELECT cleanup_allowed FROM owned_objects
-WHERE task_id = 'task-v2' AND scope = 'baidu_batch_dir' AND object_id = 'b-1'`).Scan(&cleanupAllowed); err != nil {
+SELECT cleanup_allowed, cleaned_at, last_error FROM owned_objects
+WHERE task_id = 'task-v2' AND scope = 'baidu_batch_dir' AND object_id = 'b-1'`).Scan(&cleanupAllowed, &cleanedAt, &cleanupError); err != nil {
 		t.Fatal(err)
 	}
-	if cleanupAllowed != 0 {
-		t.Fatal("migration changed cleanup provenance")
+	if cleanupAllowed != 0 || cleanedAt != "" || cleanupError != "" {
+		t.Fatalf("migration changed cleanup provenance: allowed=%d cleaned_at=%q error=%q", cleanupAllowed, cleanedAt, cleanupError)
 	}
 }
 
@@ -180,8 +181,6 @@ WHERE task_id = 'task-file' AND file_id = '201'`, FileLocalReady); err != nil {
 		t.Fatal(err)
 	}
 
-	// Simulate a previous process committing the remote object before SQLite
-	// advanced to DRIVE_UPLOADED. Recovery is allowed to adopt that object ID.
 	if err := store.RecordDriveUploaded(ctx, "task-file", "201", "drive-file-201"); err != nil {
 		t.Fatal(err)
 	}
