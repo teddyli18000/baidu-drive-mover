@@ -28,7 +28,7 @@ func (c *Client) ListStagingPathForCleanup(ctx context.Context, remotePath strin
 	query.Set("path", clean)
 	query.Set("by", "name")
 	query.Set("order", "asc")
-	body, status, err := c.doPCS(ctx, http.MethodGet, "/rest/2.0/pcs/file", query, nil, 4<<20)
+	body, status, err := c.doPCSRead(ctx, http.MethodGet, "/rest/2.0/pcs/file", query, nil, 4<<20)
 	if err != nil {
 		return nil, err
 	}
