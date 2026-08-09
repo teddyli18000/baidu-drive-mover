@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"path"
 	"strings"
+
+	"github.com/teddyli18000/baidu-drive-mover/internal/drive/rclone"
 )
 
 func validateLogicalPath(value string, allowRoot bool) (string, error) {
@@ -37,7 +39,7 @@ func remotePath(logical string) (string, error) {
 		return "", err
 	}
 	if clean == "/" {
-		return "bdm-drive:", nil
+		return rclone.RemoteName + ":", nil
 	}
-	return "bdm-drive:" + strings.TrimPrefix(clean, "/"), nil
+	return rclone.RemoteName + ":" + strings.TrimPrefix(clean, "/"), nil
 }
