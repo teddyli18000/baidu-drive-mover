@@ -55,6 +55,9 @@ func (c *Client) CheckVersion(ctx context.Context) error {
 	}
 	result, err := c.run(ctx, "version", false, "", nil)
 	if err != nil {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
 		return fmt.Errorf("run pinned rclone version check: %w", err)
 	}
 	output := strings.TrimSpace(result.Stdout)
@@ -91,6 +94,9 @@ func (c *Client) RunTask(ctx context.Context, rootID, command string, args ...st
 func (c *Client) runSensitive(ctx context.Context, command string, args []string) error {
 	_, err := c.run(ctx, command, false, "", args)
 	if err != nil {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
 		return fmt.Errorf("rclone authentication command failed")
 	}
 	return nil
