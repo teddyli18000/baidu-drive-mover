@@ -17,6 +17,7 @@ import (
 	"github.com/teddyli18000/baidu-drive-mover/internal/baidu"
 	"github.com/teddyli18000/baidu-drive-mover/internal/browserauth"
 	downloadengine "github.com/teddyli18000/baidu-drive-mover/internal/download"
+	"github.com/teddyli18000/baidu-drive-mover/internal/drive/rclone"
 	"github.com/teddyli18000/baidu-drive-mover/internal/logsafe"
 	runtimepath "github.com/teddyli18000/baidu-drive-mover/internal/runtime"
 	"github.com/teddyli18000/baidu-drive-mover/internal/state"
@@ -174,9 +175,26 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	}
 	fmt.Fprintf(stdout, "本轮下载完成：%d 个文件，%s 已通过本地校验。\n", downloadSummary.FilesReady, formatBytes(downloadSummary.BytesReady))
 	if downloadSummary.PausedByWatermark {
-		fmt.Fprintf(stdout, "已达到 %s 本地缓存水位，任务安全暂停。\n", formatBytes(maxCacheBytes))
+		fmt.Fprintf(stdout, "已达到 %s 本地缓存水位，后续百度转存会保持暂停。\n", formatBytes(maxCacheBytes))
 	}
-	fmt.Fprintf(stdout, "任务 %s 已保留。当前 v0.4 不上传 Google Drive，也不会自动删除百度暂存或本地缓存。\n", taskID)
+
+	fmt.Fprintln(stdout, "开始重建 Google Drive 目录树并上传本轮本地文件；每个文件上传后会独立核对 ID、大小和 MD5……")
+	driveRunner := &app.DriveRunner{
+		Layout:     layout,
+		Store:      store,
+		Output:     stdout,
+		Logger:     logger,
+		Process:    rclone.OSRunner{},
+		HTTPClient: rclone.SecureHTTPClient(),
+	}
+	driveSummary, err := driveRunner.Run(ctx, taskID)
+	if err != nil {
+		logger.Error("Google Drive pass failed", "task_id", taskID, "error", err)
+		fmt.Fprintf(stderr, "任务 %s 已保留全部百度暂存、本地缓存和 Drive 断点；未执行任何自动清理。\n", taskID)
+		return 1
+	}
+	fmt.Fprintf(stdout, "Google Drive 本轮核验完成：%d 个文件，%s；任务根目录 ID 已持久化。\n", driveSummary.FilesVerified, formatBytes(driveSummary.BytesVerified))
+	fmt.Fprintf(stdout, "任务 %s 已安全保留。当前 v0.5 不删除百度暂存，也不删除 ./temp/cache/；清理与流水线回压将在 v0.6 启用。\n", taskID)
 	return 0
 }
 
