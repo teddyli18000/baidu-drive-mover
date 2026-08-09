@@ -57,10 +57,20 @@ func newCookieJar(base *url.URL, header string) (*cookiejar.Jar, error) {
 		return nil, err
 	}
 	cookies := parseCookieHeader(header)
+	if isBaiduServiceHost(base.Hostname()) {
+		for _, cookie := range cookies {
+			cookie.Domain = ".baidu.com"
+		}
+	}
 	if len(cookies) > 0 {
 		jar.SetCookies(base, cookies)
 	}
 	return jar, nil
+}
+
+func isBaiduServiceHost(host string) bool {
+	host = strings.ToLower(strings.TrimSuffix(host, "."))
+	return host == "baidu.com" || strings.HasSuffix(host, ".baidu.com")
 }
 
 func parseCookieHeader(header string) []*http.Cookie {
