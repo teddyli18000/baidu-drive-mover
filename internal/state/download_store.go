@@ -63,8 +63,8 @@ func (s *Store) MarkLocalReady(ctx context.Context, taskID, fileID, cachePath st
 	result, err := s.db.ExecContext(ctx, `
 UPDATE files
 SET status = ?, local_cache_path = ?, last_error = '', updated_at = ?
-WHERE task_id = ? AND file_id = ? AND status IN (?, ?)`,
-		FileLocalReady, cachePath, now, taskID, fileID, FileDownloading, FileLocalReady)
+WHERE task_id = ? AND file_id = ? AND status IN (?, ?, ?)`,
+		FileLocalReady, cachePath, now, taskID, fileID, FileBaiduStaged, FileDownloading, FileLocalReady)
 	if err != nil {
 		return fmt.Errorf("mark local file ready %q: %w", fileID, err)
 	}
@@ -120,6 +120,7 @@ WHERE status IN (?, ?, ?, ?, ?, ?)`,
 
 func (s *Store) GetFile(ctx context.Context, taskID, fileID string) (File, error) {
 	var file File
+	var created, updated string
 	err := s.db.QueryRowContext(ctx, `
 SELECT task_id, file_id, logical_path, parent_path, name, size, md5, status,
        baidu_staging_path, local_cache_path, drive_id, retry_count, last_error,
@@ -127,10 +128,18 @@ SELECT task_id, file_id, logical_path, parent_path, name, size, md5, status,
 FROM files WHERE task_id = ? AND file_id = ?`, taskID, fileID).Scan(
 		&file.TaskID, &file.FileID, &file.LogicalPath, &file.ParentPath, &file.Name, &file.Size, &file.MD5,
 		&file.Status, &file.BaiduStagingPath, &file.LocalCachePath, &file.DriveID, &file.RetryCount, &file.LastError,
-		&file.CreatedAt, &file.UpdatedAt,
+		&created, &updated,
 	)
 	if err != nil {
 		return File{}, fmt.Errorf("get file %q: %w", fileID, err)
+	}
+	file.CreatedAt, err = time.Parse(time.RFC3339Nano, created)
+	if err != nil {
+		return File{}, fmt.Errorf("parse file %q created_at: %w", fileID, err)
+	}
+	file.UpdatedAt, err = time.Parse(time.RFC3339Nano, updated)
+	if err != nil {
+		return File{}, fmt.Errorf("parse file %q updated_at: %w", fileID, err)
 	}
 	return file, nil
 }
