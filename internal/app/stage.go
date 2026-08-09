@@ -40,6 +40,22 @@ type StageSummary struct {
 	FilesStaged int
 }
 
+type limitedStagingRepository struct {
+	*state.Store
+	maxBatches int
+}
+
+func (r limitedStagingRepository) StagingBatches(ctx context.Context, taskID string) ([]state.Batch, error) {
+	batches, err := r.Store.StagingBatches(ctx, taskID)
+	if err != nil {
+		return nil, err
+	}
+	if r.maxBatches > 0 && len(batches) > r.maxBatches {
+		batches = batches[:r.maxBatches]
+	}
+	return batches, nil
+}
+
 func (r *StageRunner) Run(ctx context.Context, taskID string) (StageSummary, error) {
 	if r == nil || r.Store == nil || r.Browser == nil || r.NewClient == nil || r.Output == nil {
 		return StageSummary{}, fmt.Errorf("stage runner is not fully configured")
@@ -93,11 +109,10 @@ func (r *StageRunner) Run(ctx context.Context, taskID string) (StageSummary, err
 			break
 		}
 		executor := &staging.Executor{
-			Repository: r.Store,
+			Repository: limitedStagingRepository{Store: r.Store, maxBatches: r.MaxBatches},
 			Remote:     api,
 			Link:       link,
 			Share:      share,
-			MaxBatches: r.MaxBatches,
 		}
 		runErr = executor.Run(ctx, taskID)
 		if errors.Is(runErr, baidu.ErrAuthRequired) && sessionAttempt == 0 {
