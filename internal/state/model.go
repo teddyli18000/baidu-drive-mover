@@ -36,6 +36,16 @@ const (
 	FileFailedPermanent FileStatus = "FAILED_PERMANENT"
 )
 
+type BatchStatus string
+
+const (
+	BatchPending         BatchStatus = "PENDING"
+	BatchStaging         BatchStatus = "STAGING"
+	BatchStaged          BatchStatus = "STAGED"
+	BatchFailedRetryable BatchStatus = "FAILED_RETRYABLE"
+	BatchFailedPermanent BatchStatus = "FAILED_PERMANENT"
+)
+
 type Task struct {
 	ID             string
 	ShareURL       string
@@ -63,6 +73,19 @@ type File struct {
 	LastError        string
 	CreatedAt        time.Time
 	UpdatedAt        time.Time
+}
+
+type Batch struct {
+	TaskID           string
+	BatchID          string
+	LogicalParent    string
+	BaiduStagingPath string
+	Status           BatchStatus
+	FileCount        int
+	TotalBytes       int64
+	RetryCount       int
+	LastError        string
+	Files            []File
 }
 
 var allowedFileTransitions = map[FileStatus]map[FileStatus]bool{

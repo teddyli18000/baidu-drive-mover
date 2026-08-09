@@ -96,25 +96,47 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		logger.Error("cannot create Baidu cookie path", "error", err)
 		return 1
 	}
-	runner := &app.ScanRunner{
+	cookieStore := baidu.CookieStore{Path: cookiePath}
+	browser := browserauth.NewChromeBaiduLogin(layout)
+
+	scanRunner := &app.ScanRunner{
 		Layout:      layout,
 		Store:       store,
-		Browser:     browserauth.NewChromeBaiduLogin(layout),
+		Browser:     browser,
 		Input:       reader,
 		Output:      stdout,
 		Logger:      logger,
-		CookieStore: baidu.CookieStore{Path: cookiePath},
+		CookieStore: cookieStore,
 		NewClient: func(cookieHeader string) (app.BaiduAPI, error) {
 			return baidu.NewClient(cookieHeader)
 		},
 	}
-	taskID, stats, err := runner.Run(ctx, rawLink)
+	taskID, stats, err := scanRunner.Run(ctx, rawLink)
 	if err != nil {
 		logger.Error("Baidu share scan failed", "error", err)
 		return 1
 	}
 	fmt.Fprintf(stdout, "扫描完成：%d 个文件夹，%d 个文件，共 %s。\n", stats.Directories, stats.Files, formatBytes(stats.Bytes))
-	fmt.Fprintf(stdout, "任务 %s 的目录清单已保存；当前版本不会执行转存或删除。\n", taskID)
+	fmt.Fprintln(stdout, "开始按安全批次转存到百度网盘临时区……")
+
+	stageRunner := &app.StageRunner{
+		Store:       store,
+		Browser:     browser,
+		Output:      stdout,
+		Logger:      logger,
+		CookieStore: cookieStore,
+		NewClient: func(cookieHeader string) (app.StagingBaiduAPI, error) {
+			return baidu.NewClient(cookieHeader)
+		},
+	}
+	stageSummary, err := stageRunner.Run(ctx, taskID)
+	if err != nil {
+		logger.Error("Baidu staging failed", "task_id", taskID, "error", err)
+		fmt.Fprintf(stderr, "任务 %s 已保留断点；后续版本会提供完整自动恢复入口。\n", taskID)
+		return 1
+	}
+	fmt.Fprintf(stdout, "百度暂存完成：%d 个文件已核对。\n", stageSummary.FilesStaged)
+	fmt.Fprintf(stdout, "任务 %s 已保留。当前 v0.3 不会下载、上传 Drive 或清理百度暂存文件。\n", taskID)
 	return 0
 }
 

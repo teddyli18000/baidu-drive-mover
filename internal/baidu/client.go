@@ -13,15 +13,17 @@ import (
 )
 
 const (
-	defaultBaseURL   = "https://pan.baidu.com"
-	defaultUserAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0.0.0 Safari/537.36"
-	panAppID         = "250528"
+	defaultBaseURL    = "https://pan.baidu.com"
+	defaultPCSBaseURL = "https://pcs.baidu.com"
+	defaultUserAgent  = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0.0.0 Safari/537.36"
+	panAppID          = "250528"
 )
 
 type ClientOption func(*clientOptions)
 
 type clientOptions struct {
 	baseURL        string
+	pcsBaseURL     string
 	httpClient     *http.Client
 	sleep          func(context.Context, time.Duration) error
 	now            func() time.Time
@@ -30,6 +32,7 @@ type clientOptions struct {
 
 type Client struct {
 	baseURL        *url.URL
+	pcsBaseURL     *url.URL
 	httpClient     *http.Client
 	sleep          func(context.Context, time.Duration) error
 	now            func() time.Time
@@ -38,6 +41,10 @@ type Client struct {
 
 func WithBaseURL(raw string) ClientOption {
 	return func(options *clientOptions) { options.baseURL = raw }
+}
+
+func WithPCSBaseURL(raw string) ClientOption {
+	return func(options *clientOptions) { options.pcsBaseURL = raw }
 }
 
 func WithHTTPClient(client *http.Client) ClientOption {
@@ -51,6 +58,7 @@ func WithSleep(fn func(context.Context, time.Duration) error) ClientOption {
 func NewClient(cookieHeader string, opts ...ClientOption) (*Client, error) {
 	options := clientOptions{
 		baseURL:        defaultBaseURL,
+		pcsBaseURL:     defaultPCSBaseURL,
 		now:            time.Now,
 		maxListRetries: 4,
 		sleep: func(ctx context.Context, d time.Duration) error {
@@ -67,9 +75,13 @@ func NewClient(cookieHeader string, opts ...ClientOption) (*Client, error) {
 	for _, opt := range opts {
 		opt(&options)
 	}
-	base, err := url.Parse(options.baseURL)
-	if err != nil || base.Scheme == "" || base.Host == "" {
-		return nil, fmt.Errorf("invalid Baidu base URL")
+	base, err := parseServiceBase(options.baseURL, "Baidu base")
+	if err != nil {
+		return nil, err
+	}
+	pcsBase, err := parseServiceBase(options.pcsBaseURL, "Baidu PCS base")
+	if err != nil {
+		return nil, err
 	}
 	jar, err := newCookieJar(base, cookieHeader)
 	if err != nil {
@@ -82,11 +94,20 @@ func NewClient(cookieHeader string, opts ...ClientOption) (*Client, error) {
 	httpClient.Jar = jar
 	return &Client{
 		baseURL:        base,
+		pcsBaseURL:     pcsBase,
 		httpClient:     httpClient,
 		sleep:          options.sleep,
 		now:            options.now,
 		maxListRetries: options.maxListRetries,
 	}, nil
+}
+
+func parseServiceBase(raw, label string) (*url.URL, error) {
+	base, err := url.Parse(raw)
+	if err != nil || base.Scheme == "" || base.Host == "" {
+		return nil, fmt.Errorf("invalid %s URL", label)
+	}
+	return base, nil
 }
 
 func (c *Client) CookieString() string {
@@ -173,8 +194,16 @@ func (c *Client) VerifyPassword(ctx context.Context, link ShareLink, share Share
 }
 
 func (c *Client) do(ctx context.Context, method, endpoint string, query, form url.Values, referer string, maxBytes int64) ([]byte, int, error) {
+	return c.doAt(ctx, c.baseURL, method, endpoint, query, form, referer, maxBytes)
+}
+
+func (c *Client) doPCS(ctx context.Context, method, endpoint string, query, form url.Values, maxBytes int64) ([]byte, int, error) {
+	return c.doAt(ctx, c.pcsBaseURL, method, endpoint, query, form, "", maxBytes)
+}
+
+func (c *Client) doAt(ctx context.Context, base *url.URL, method, endpoint string, query, form url.Values, referer string, maxBytes int64) ([]byte, int, error) {
 	reference := &url.URL{Path: endpoint}
-	u := c.baseURL.ResolveReference(reference)
+	u := base.ResolveReference(reference)
 	if query != nil {
 		u.RawQuery = query.Encode()
 	}

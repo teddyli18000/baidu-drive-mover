@@ -56,6 +56,7 @@ jobs:
           if [ -n "$bad" ]; then
             echo "gofmt required:"
             echo "$bad"
+            gofmt -d ./cmd ./internal
             exit 1
           fi
       - name: Test with race detector

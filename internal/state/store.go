@@ -10,7 +10,7 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-const schemaVersion = 1
+const schemaVersion = 2
 
 type Store struct {
 	db *sql.DB
@@ -80,12 +80,28 @@ CREATE TABLE IF NOT EXISTS schema_migrations (
 		if err := migrationV1(ctx, tx); err != nil {
 			return err
 		}
-		if _, err := tx.ExecContext(ctx, `INSERT INTO schema_migrations(version, applied_at) VALUES(1, ?)`, time.Now().UTC().Format(time.RFC3339Nano)); err != nil {
-			return fmt.Errorf("record schema migration: %w", err)
+		if err := recordMigration(ctx, tx, 1); err != nil {
+			return err
+		}
+		current = 1
+	}
+	if current < 2 {
+		if err := migrationV2(ctx, tx); err != nil {
+			return err
+		}
+		if err := recordMigration(ctx, tx, 2); err != nil {
+			return err
 		}
 	}
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("commit schema migration: %w", err)
+	}
+	return nil
+}
+
+func recordMigration(ctx context.Context, tx *sql.Tx, version int) error {
+	if _, err := tx.ExecContext(ctx, `INSERT INTO schema_migrations(version, applied_at) VALUES(?, ?)`, version, time.Now().UTC().Format(time.RFC3339Nano)); err != nil {
+		return fmt.Errorf("record schema migration %d: %w", version, err)
 	}
 	return nil
 }
@@ -161,6 +177,29 @@ func migrationV1(ctx context.Context, tx *sql.Tx) error {
 	for _, stmt := range statements {
 		if _, err := tx.ExecContext(ctx, stmt); err != nil {
 			return fmt.Errorf("apply schema v1: %w", err)
+		}
+	}
+	return nil
+}
+
+func migrationV2(ctx context.Context, tx *sql.Tx) error {
+	statements := []string{
+		`ALTER TABLE batches ADD COLUMN baidu_staging_path TEXT NOT NULL DEFAULT '';`,
+		`CREATE TABLE batch_files (
+    task_id TEXT NOT NULL,
+    batch_id TEXT NOT NULL,
+    file_id TEXT NOT NULL,
+    ordinal INTEGER NOT NULL CHECK(ordinal >= 0),
+    PRIMARY KEY(task_id, batch_id, file_id),
+    UNIQUE(task_id, file_id),
+    FOREIGN KEY(task_id, batch_id) REFERENCES batches(task_id, batch_id) ON DELETE CASCADE,
+    FOREIGN KEY(task_id, file_id) REFERENCES files(task_id, file_id) ON DELETE CASCADE
+);`,
+		`CREATE INDEX idx_batch_files_order ON batch_files(task_id, batch_id, ordinal);`,
+	}
+	for _, stmt := range statements {
+		if _, err := tx.ExecContext(ctx, stmt); err != nil {
+			return fmt.Errorf("apply schema v2: %w", err)
 		}
 	}
 	return nil

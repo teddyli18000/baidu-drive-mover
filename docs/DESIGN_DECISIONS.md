@@ -139,3 +139,29 @@ Live Baidu/Drive acceptance testing is a separate controlled step and never requ
 ## D15. Safety over silent success
 
 Decision: when the tool cannot prove that a file reached Drive correctly, it remains incomplete. It must never silently skip a deterministic failure and report the task as complete.
+
+## D16. Baidu staging is isolated by transfer batch
+
+Decision: Baidu staging does **not** mirror the user's logical source tree. Each planned transfer batch gets a unique tool-owned directory:
+
+```text
+/BaiduDriveMover/<task-id>/<batch-id>/
+```
+
+The logical source path remains SQLite metadata and is recreated only on Google Drive.
+
+Reasons:
+
+- every staging directory is bounded to the conservative batch size, so reconciliation never needs to enumerate a huge directory;
+- files with the same name in different source directories cannot collide during staging;
+- partial transfer/restart recovery can reconcile one small batch directory independently;
+- no source filename is needed to construct local filesystem paths;
+- cleanup provenance is simpler because every remote staging path is an internal tool-generated identifier.
+
+Rules:
+
+- files in one batch still come from the same logical parent directory;
+- default batch size starts at 200, well below the observed 500-file free-account ceiling;
+- transfer-limit/partial failures are reconciled against the isolated batch directory, then only missing files are split/retried;
+- a batch directory is registered in `owned_objects` before remote creation;
+- automatic cleanup remains disabled until downstream Drive verification grants cleanup eligibility.
