@@ -227,14 +227,17 @@ func TestUploaderDetectsLocalMutationDuringTransfer(t *testing.T) {
 	}
 }
 
-func TestUploaderRejectsNonOpaqueRegisteredCachePath(t *testing.T) {
-	store, layout, _, _ := newUploadFixtureWithCachePath(t, "task-badcache", "409", "/bad.bin", []byte("safe"), "cache/other/attacker.bin")
-	remote := newFakeUploadRemote("root-upload")
-	if _, err := (&Uploader{Layout: layout, State: store, Remote: remote}).Run(context.Background(), "task-badcache"); err == nil {
-		t.Fatal("expected non-opaque cache path rejection")
+func TestLocalReadyStateRejectsNonOpaqueRegisteredCachePath(t *testing.T) {
+	store, _, file, _ := newUploadFixture(t, "task-badcache", "409", "/bad.bin", []byte("safe"))
+	if err := store.MarkLocalReady(context.Background(), file.TaskID, file.FileID, "cache/other/attacker.bin"); err == nil {
+		t.Fatal("expected non-opaque cache path rejection at state boundary")
 	}
-	if len(remote.calls) != 0 {
-		t.Fatalf("bad cache path reached Drive: %v", remote.calls)
+	after, err := store.GetFile(context.Background(), file.TaskID, file.FileID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after.LocalCachePath != file.LocalCachePath {
+		t.Fatalf("rejected cache path changed persisted path: %q", after.LocalCachePath)
 	}
 }
 

@@ -11,8 +11,8 @@ import (
 
 const (
 	ownedScopeLocalCacheFile = "local_cache_file"
-	ownedScopeBaiduBatchDir   = "baidu_batch_dir"
-	ownedScopeBaiduTaskRoot   = "baidu_task_root"
+	ownedScopeBaiduBatchDir  = "baidu_batch_dir"
+	ownedScopeBaiduTaskRoot  = "baidu_task_root"
 )
 
 type CleanupObject struct {

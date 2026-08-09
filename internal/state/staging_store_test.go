@@ -196,8 +196,8 @@ func TestMigrationFromSchemaV1ToLatest(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if version != 3 {
-		t.Fatalf("schema=%d want=3", version)
+	if version != 4 {
+		t.Fatalf("schema=%d want=4", version)
 	}
 	if _, err := store.db.Exec(`SELECT baidu_staging_path FROM batches LIMIT 1`); err != nil {
 		t.Fatalf("missing v2 batches column: %v", err)
@@ -207,6 +207,9 @@ func TestMigrationFromSchemaV1ToLatest(t *testing.T) {
 	}
 	if _, err := store.db.Exec(`SELECT drive_root_name FROM tasks LIMIT 1`); err != nil {
 		t.Fatalf("missing v3 task Drive root name column: %v", err)
+	}
+	if _, err := store.db.Exec(`SELECT cleaned_at, last_error FROM owned_objects LIMIT 1`); err != nil {
+		t.Fatalf("missing v4 cleanup outcome columns: %v", err)
 	}
 }
 
