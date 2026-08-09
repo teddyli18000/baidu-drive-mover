@@ -28,9 +28,11 @@ Normal use should be:
 
 ## Development status
 
-Current milestone: **v0.2.0 Read-only Baidu**.
+Current milestone: **v0.3.0 Baidu Staging**.
 
-This milestone adds share-link parsing, dedicated Chrome authentication, recursive paginated share scanning, and durable manifest persistence. It intentionally performs **no Baidu transfer/delete and no Google Drive write** yet.
+This milestone adds deterministic file-level batching and verified transfer into isolated tool-owned Baidu staging directories. It handles directories larger than the normal single-transfer limit, reconciles partial success before retrying, and never trusts transfer success until the staged objects are listed and matched.
+
+Current v0.3 intentionally does **not** download, upload to Google Drive, or automatically delete staged Baidu files yet. Those steps arrive in later milestones after staging correctness is proven.
 
 Design and release gates:
 
