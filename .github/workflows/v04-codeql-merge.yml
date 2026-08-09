@@ -1,0 +1,56 @@
+name: v0.4 CodeQL Merge Gate
+
+on:
+  push:
+    branches: [dev/v0.4-downloader]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  security-events: write
+
+jobs:
+  codeql:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: dev/v0.4-downloader
+      - name: Require Windows/Linux gate seal
+        run: test -f docs/gates/v0.4-ci-passed.txt
+      - uses: actions/setup-go@v7
+        with:
+          go-version: '1.26.5'
+          cache: true
+      - uses: github/codeql-action/init@v3
+        with:
+          languages: go
+      - run: go test ./... -count=1
+      - uses: github/codeql-action/analyze@v3
+
+  merge:
+    needs: codeql
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: dev/v0.4-downloader
+          fetch-depth: 0
+      - name: Remove merge helper from final tree
+        run: |
+          rm -f .github/workflows/v04-codeql-merge.yml
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git commit -m 'ci: complete v0.4 CodeQL gate'
+          git push origin HEAD:dev/v0.4-downloader
+      - name: Mark PR ready and squash merge
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh pr ready 4 --repo teddyli18000/baidu-drive-mover || true
+          gh pr merge 4 --repo teddyli18000/baidu-drive-mover --squash --delete-branch=false
