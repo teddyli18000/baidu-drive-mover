@@ -24,3 +24,6 @@ The executable hash was derived in a credential-free GitHub Actions job by:
 The one-shot derivation workflow is removed after the value is recorded. Production code must verify **both** the archive hash before extraction and the executable hash before any execution. `rclone version` is an additional semantic check, not the first trust check.
 
 Changing either hash or the accepted rclone version requires an explicit dependency/design update and a fresh official-artifact verification. The application must never substitute a binary found on `%PATH%` or silently follow `latest`.
+
+Windows acceptance: official pinned archive and executable hashes verified, and rclone v1.74.4 executed successfully on windows-latest in credential-free CI on 2026-08-09.
+
