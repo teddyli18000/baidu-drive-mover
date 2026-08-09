@@ -19,7 +19,8 @@ func (l *Layout) ResolveTempRelative(relative string) (string, error) {
 	if relative == "" {
 		return "", errors.New("empty temp-relative path")
 	}
-	if filepath.IsAbs(relative) {
+	normalized := strings.ReplaceAll(relative, "\\", "/")
+	if filepath.IsAbs(relative) || strings.HasPrefix(normalized, "/") || hasWindowsVolumePrefix(normalized) {
 		return "", fmt.Errorf("absolute temp-relative path is not allowed: %q", relative)
 	}
 	clean := filepath.Clean(filepath.FromSlash(relative))
@@ -27,6 +28,14 @@ func (l *Layout) ResolveTempRelative(relative string) (string, error) {
 		return "", fmt.Errorf("temp-relative path escapes root: %q", relative)
 	}
 	return l.JoinTemp(clean)
+}
+
+func hasWindowsVolumePrefix(value string) bool {
+	if len(value) < 2 || value[1] != ':' {
+		return false
+	}
+	first := value[0]
+	return (first >= 'A' && first <= 'Z') || (first >= 'a' && first <= 'z')
 }
 
 // EnsureTempDir creates a directory under temp after containment/symlink checks.
