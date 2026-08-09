@@ -14,16 +14,24 @@ import (
 )
 
 type fakeCleanupRemote struct {
-	calls []string
-	err   error
+	deleteCalls []string
+	listCalls   []string
+	deleteErr   error
+	listErr     error
+	listItems   []baidu.RemoteFile
 }
 
 func (r *fakeCleanupRemote) DeleteStagingPath(_ context.Context, remotePath string) error {
-	r.calls = append(r.calls, remotePath)
-	return r.err
+	r.deleteCalls = append(r.deleteCalls, remotePath)
+	return r.deleteErr
 }
 
-func TestCleanupEngineRemovesOnlyAuthorizedBatchAndReleasesReservation(t *testing.T) {
+func (r *fakeCleanupRemote) ListStagingPathForCleanup(_ context.Context, remotePath string) ([]baidu.RemoteFile, error) {
+	r.listCalls = append(r.listCalls, remotePath)
+	return append([]baidu.RemoteFile(nil), r.listItems...), r.listErr
+}
+
+func TestCleanupEngineRemovesOnlyAuthorizedBatchAndEmptyTaskRoot(t *testing.T) {
 	layout, store, batch := newCleanupEngineFixture(t, "task-engine")
 	remote := &fakeCleanupRemote{}
 	engine := &Engine{Layout: layout, Repository: store, Remote: remote}
@@ -31,11 +39,21 @@ func TestCleanupEngineRemovesOnlyAuthorizedBatchAndReleasesReservation(t *testin
 	if err != nil {
 		t.Fatal(err)
 	}
-	if summary.BatchesDone != 1 || summary.FilesDone != 2 || summary.BytesFreed != 7 {
+	if summary.BatchesDone != 1 || summary.FilesDone != 2 || summary.BytesFreed != 7 || !summary.TaskRootDone {
 		t.Fatalf("unexpected cleanup summary: %+v", summary)
 	}
-	if len(remote.calls) != 1 || remote.calls[0] != batch.BaiduStagingPath {
-		t.Fatalf("unexpected Baidu cleanup calls: %v", remote.calls)
+	taskRoot := "/BaiduDriveMover/" + batch.TaskID
+	wantDeletes := []string{batch.BaiduStagingPath, taskRoot}
+	if len(remote.deleteCalls) != len(wantDeletes) {
+		t.Fatalf("unexpected Baidu cleanup calls: %v", remote.deleteCalls)
+	}
+	for i := range wantDeletes {
+		if remote.deleteCalls[i] != wantDeletes[i] {
+			t.Fatalf("delete[%d]=%q want=%q", i, remote.deleteCalls[i], wantDeletes[i])
+		}
+	}
+	if len(remote.listCalls) != 1 || remote.listCalls[0] != taskRoot {
+		t.Fatalf("task root was not inspected exactly once: %v", remote.listCalls)
 	}
 	for _, fileID := range []string{"101", "102"} {
 		rel := path.Join("cache", batch.TaskID, fileID+".bin")
@@ -50,6 +68,13 @@ func TestCleanupEngineRemovesOnlyAuthorizedBatchAndReleasesReservation(t *testin
 			t.Fatalf("file %s status=%s want DONE", fileID, file.Status)
 		}
 	}
+	registered, cleaned, err := store.BaiduTaskRootCleanupState(context.Background(), batch.TaskID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !registered || !cleaned {
+		t.Fatalf("task root cleanup state registered=%v cleaned=%v", registered, cleaned)
+	}
 	reserved, err := store.ReservedCacheBytes(context.Background())
 	if err != nil {
 		t.Fatal(err)
@@ -61,7 +86,7 @@ func TestCleanupEngineRemovesOnlyAuthorizedBatchAndReleasesReservation(t *testin
 
 func TestCleanupEngineRestartsAfterLocalDeletionAndBaiduFailure(t *testing.T) {
 	layout, store, batch := newCleanupEngineFixture(t, "task-restart")
-	remote := &fakeCleanupRemote{err: errors.New("synthetic Baidu outage")}
+	remote := &fakeCleanupRemote{deleteErr: errors.New("synthetic Baidu outage")}
 	engine := &Engine{Layout: layout, Repository: store, Remote: remote}
 	if _, err := engine.Run(context.Background(), batch.TaskID); err == nil {
 		t.Fatal("expected first cleanup pass to fail at Baidu deletion")
@@ -87,16 +112,16 @@ func TestCleanupEngineRestartsAfterLocalDeletionAndBaiduFailure(t *testing.T) {
 		t.Fatalf("reservation released before whole batch cleanup: %d", reserved)
 	}
 
-	remote.err = baidu.ErrStagingNotFound
+	remote.deleteErr = baidu.ErrStagingNotFound
 	summary, err := engine.Run(context.Background(), batch.TaskID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if summary.BatchesDone != 1 || summary.FilesDone != 2 {
+	if summary.BatchesDone != 1 || summary.FilesDone != 2 || !summary.TaskRootDone {
 		t.Fatalf("restart did not complete cleanup: %+v", summary)
 	}
-	if len(remote.calls) != 2 {
-		t.Fatalf("remote delete calls=%d want=2", len(remote.calls))
+	if len(remote.deleteCalls) != 3 {
+		t.Fatalf("remote delete calls=%d want=3 (%v)", len(remote.deleteCalls), remote.deleteCalls)
 	}
 	reserved, err = store.ReservedCacheBytes(context.Background())
 	if err != nil {
@@ -104,6 +129,47 @@ func TestCleanupEngineRestartsAfterLocalDeletionAndBaiduFailure(t *testing.T) {
 	}
 	if reserved != 0 {
 		t.Fatalf("reservation remains after recovered cleanup: %d", reserved)
+	}
+}
+
+func TestCleanupEngineRefusesTaskRootContainingUnknownObject(t *testing.T) {
+	layout, store, batch := newCleanupEngineFixture(t, "task-unknown-root")
+	remote := &fakeCleanupRemote{listItems: []baidu.RemoteFile{{Name: "unknown", Path: "/BaiduDriveMover/task-unknown-root/unknown", IsDir: true}}}
+	engine := &Engine{Layout: layout, Repository: store, Remote: remote}
+	if _, err := engine.Run(context.Background(), batch.TaskID); err == nil {
+		t.Fatal("expected non-empty task root to block deletion")
+	}
+	taskRoot := "/BaiduDriveMover/" + batch.TaskID
+	for _, deleted := range remote.deleteCalls {
+		if deleted == taskRoot {
+			t.Fatalf("non-empty task root was deleted: %v", remote.deleteCalls)
+		}
+	}
+	registered, cleaned, err := store.BaiduTaskRootCleanupState(context.Background(), batch.TaskID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !registered || cleaned {
+		t.Fatalf("unexpected task root cleanup state registered=%v cleaned=%v", registered, cleaned)
+	}
+}
+
+func TestCleanupEngineReconcilesAlreadyMissingTaskRoot(t *testing.T) {
+	layout, store, batch := newCleanupEngineFixture(t, "task-missing-root")
+	remote := &fakeCleanupRemote{listErr: baidu.ErrStagingNotFound}
+	engine := &Engine{Layout: layout, Repository: store, Remote: remote}
+	summary, err := engine.Run(context.Background(), batch.TaskID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !summary.TaskRootDone {
+		t.Fatal("already-missing task root was not reconciled")
+	}
+	taskRoot := "/BaiduDriveMover/" + batch.TaskID
+	for _, deleted := range remote.deleteCalls {
+		if deleted == taskRoot {
+			t.Fatalf("already-missing task root should not require delete: %v", remote.deleteCalls)
+		}
 	}
 }
 
