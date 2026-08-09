@@ -31,13 +31,16 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	fs.SetOutput(stderr)
 	showVersion := fs.Bool("version", false, "print version")
 	checkOnly := fs.Bool("check", false, "validate local runtime/state setup and exit")
-	scanURL := fs.String("scan", "", "scan a Baidu share link")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
 	if *showVersion {
 		fmt.Fprintf(stdout, "BaiduDriveMover %s (commit %s, built %s)\n", version.Version, version.Commit, version.BuildDate)
 		return 0
+	}
+	if fs.NArg() != 0 {
+		fmt.Fprintln(stderr, "请直接启动程序后粘贴分享链接，不要把链接放在命令行参数里。")
+		return 2
 	}
 
 	layout, err := runtimepath.FromExecutable()
@@ -81,16 +84,13 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	}
 
 	reader := bufio.NewReader(stdin)
-	rawLink := strings.TrimSpace(*scanURL)
-	if rawLink == "" {
-		fmt.Fprint(stdout, "请粘贴百度网盘分享链接: ")
-		line, readErr := reader.ReadString('\n')
-		if readErr != nil && line == "" {
-			fmt.Fprintf(stderr, "读取分享链接失败: %v\n", readErr)
-			return 1
-		}
-		rawLink = strings.TrimSpace(line)
+	fmt.Fprint(stdout, "请粘贴百度网盘分享链接: ")
+	line, readErr := reader.ReadString('\n')
+	if readErr != nil && line == "" {
+		fmt.Fprintf(stderr, "读取分享链接失败: %v\n", readErr)
+		return 1
 	}
+	rawLink := strings.TrimSpace(line)
 	cookiePath, err := layout.JoinTemp("auth", "baidu.cookies")
 	if err != nil {
 		logger.Error("cannot create Baidu cookie path", "error", err)
