@@ -200,7 +200,7 @@ func (c *Client) listSharePage(ctx context.Context, link ShareLink, share ShareC
 }
 
 func safeShareEntryName(raw string) (string, error) {
-	name := strings.TrimSpace(raw)
+	name := raw
 	if name == "" || name == "." || name == ".." {
 		return "", fmt.Errorf("Baidu returned unsafe empty/dot filename %q", raw)
 	}
