@@ -137,7 +137,8 @@ func (u *Uploader) uploadOne(ctx context.Context, rootID string, file state.File
 	if err != nil {
 		return false, uploadPermanent(err)
 	}
-	_, copyErr := u.Remote.RunTask(ctx, rootID, "copyto", localPath, destination, "--checksum", "--retries", "1", "--low-level-retries", "3")
+	_, copyErr := u.Remote.RunTask(ctx, rootID, "copyto", localPath, destination,
+		"--ignore-existing", "--checksum", "--retries", "1", "--low-level-retries", "3")
 
 	// Reconcile even when copyto reports an error. The remote commit may have
 	// succeeded immediately before the local process observed a failure.
@@ -205,7 +206,8 @@ func (u *Uploader) listNamedFiles(ctx context.Context, rootID, logicalParent, na
 	if err != nil {
 		return nil, uploadPermanent(err)
 	}
-	result, err := u.Remote.RunTask(ctx, rootID, "lsjson", remote, "--files-only", "--hash", "--hash-type", "MD5", "--no-modtime", "--no-mimetype")
+	result, err := u.Remote.RunTask(ctx, rootID, "lsjson", remote,
+		"--hash", "--hash-type", "MD5", "--no-modtime", "--no-mimetype")
 	if err != nil {
 		return nil, fmt.Errorf("list Drive files under %q: %w", parent, err)
 	}
@@ -219,7 +221,7 @@ func (u *Uploader) listNamedFiles(ctx context.Context, rootID, logicalParent, na
 			continue
 		}
 		if item.IsDir || strings.TrimSpace(item.ID) == "" {
-			return nil, uploadPermanent(fmt.Errorf("invalid same-name Drive file metadata for %q", name))
+			return nil, uploadPermanent(fmt.Errorf("same-name Drive object is not the expected regular file for %q", name))
 		}
 		matches = append(matches, item)
 	}
