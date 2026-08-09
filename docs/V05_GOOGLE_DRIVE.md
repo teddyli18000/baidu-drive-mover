@@ -329,4 +329,102 @@ v0.5.0 may merge only when all of the following hold:
 - no Baidu/local cleanup is enabled yet;
 - Windows CI, Linux race tests, and CodeQL pass.
 
+## 16. Frozen implementation sequence
+
+Implementation proceeds in the following order. A later phase must not be used to paper over an invariant missing from an earlier phase.
+
+### Phase A — schema v3 and recovery primitives
+
+1. inspect the current v2 schema and state transitions;
+2. add task Drive-root identity and directory Drive IDs;
+3. add explicit transactional v2 -> v3 migration;
+4. add durable Drive file transitions and recovery queries;
+5. prove migration against a synthetic v2 database before introducing any Drive subprocess.
+
+Exit gate: schema migration/state tests pass and existing v0.4 provenance remains intact.
+
+### Phase B — rclone helper and process sandbox
+
+1. define the pinned helper metadata in code;
+2. implement archive SHA-256 verification before extraction;
+3. reject malformed/zip-slip archive entries and extract only the expected executable;
+4. verify the helper version before use;
+5. introduce a small process-runner interface so ordinary CI uses a fake runner;
+6. centralize common rclone arguments and environment so config/cache/temp containment cannot be forgotten by individual commands;
+7. bound captured stdout/stderr.
+
+Exit gate: tests prove no helper execution before verification, no shell use, and no rclone writable path outside `./temp/`.
+
+### Phase C — least-privilege OAuth
+
+1. create/reconcile the fixed `bdm-drive` remote;
+2. explicitly request `scope=drive.file`;
+3. store configuration only in `temp/auth/rclone.conf`;
+4. support re-authentication for expired/revoked credentials without dumping secrets.
+
+Exit gate: fake-runner tests prove the scope is explicit and no configuration-display command is used.
+
+### Phase D — task root and logical directory tree
+
+1. create or reconcile `BaiduDriveMover-<task-id>`;
+2. obtain and durably record its Drive folder ID;
+3. from that point forward require `--drive-root-folder-id` on every task operation;
+4. reconstruct logical directories parent-before-child, including empty directories;
+5. persist each observed directory ID;
+6. fail closed on ambiguous duplicate names.
+
+Exit gate: deep-tree, empty-directory, duplicate-name, root-scoping, and restart tests pass.
+
+### Phase E — file upload and independent verification
+
+1. select only `LOCAL_READY`/recoverable Drive states;
+2. revalidate the opaque local cache and compute MD5;
+3. reconcile destination before upload to adopt a crash-committed matching object;
+4. transition to `DRIVE_UPLOADING` only immediately before `copyto`;
+5. process success advances only to `DRIVE_UPLOADED`;
+6. independently query Drive metadata;
+7. require unambiguous ID + exact size + MD5 before `DRIVE_VERIFIED`;
+8. preserve incomplete state on missing or contradictory evidence.
+
+Exit gate: fault-injection tests show an interruption around remote commit does not silently duplicate or falsely verify a file.
+
+### Phase F — app/CLI integration
+
+1. run the Drive pass only after v0.4 has produced verified `LOCAL_READY` files;
+2. show concise authentication/progress/blocking messages;
+3. retain all local and Baidu staging data after Drive verification;
+4. do not introduce cleanup or continuous pipeline behavior yet.
+
+Exit gate: end-to-end fake service tests reach `DRIVE_VERIFIED` while cleanup remains impossible.
+
+### Phase G — final milestone gates
+
+Run the permanent repository gates on the final head:
+
+- `gofmt` and module tidiness;
+- `go vet ./...`;
+- ordinary Go tests;
+- Linux `go test -race ./...`;
+- Windows native test/build;
+- CodeQL;
+- separate controlled real-helper/live-Drive acceptance only after credential-free gates are green.
+
+## 17. Fail-closed stop conditions
+
+Any of the following stops the Drive pass rather than applying a permissive fallback:
+
+- helper archive hash or helper version does not match the pin;
+- any helper/config/cache/temp path cannot be proven inside `./temp/`;
+- an rclone command after task-root creation is missing the persisted root folder ID;
+- a logical path is non-canonical or attempts to escape logical root;
+- a Drive lookup is ambiguous because duplicate same-name objects cannot be uniquely reconciled;
+- destination object ID is missing;
+- exact destination size evidence is missing or mismatched;
+- destination MD5 evidence is missing or mismatched;
+- OAuth would require widening from `drive.file` without a documented design change;
+- recovery cannot distinguish a tool-owned object from unrelated Drive content;
+- a code path attempts Drive delete/purge/sync, Baidu cleanup, local cleanup, or recycle-bin clearing in v0.5.
+
+There is no "best effort verified" state. Failure to prove destination correctness leaves the file incomplete.
+
 Only after this document and the corresponding design decisions are committed is v0.5 implementation allowed to begin.
