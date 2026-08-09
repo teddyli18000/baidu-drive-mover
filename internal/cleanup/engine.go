@@ -99,11 +99,19 @@ func (e *Engine) Run(ctx context.Context, taskID string) (Summary, error) {
 
 func (e *Engine) cleanupBatch(ctx context.Context, batch state.CleanupBatch) error {
 	filesByID := make(map[string]state.File, len(batch.Files))
+	filesByRemotePath := make(map[string]state.File, len(batch.Files))
 	for _, file := range batch.Files {
 		if _, exists := filesByID[file.FileID]; exists {
 			return fmt.Errorf("duplicate cleanup file identity %q", file.FileID)
 		}
+		if file.BaiduStagingPath == "" {
+			return fmt.Errorf("cleanup file %q has no registered Baidu staging path", file.FileID)
+		}
+		if _, exists := filesByRemotePath[file.BaiduStagingPath]; exists {
+			return fmt.Errorf("duplicate cleanup Baidu staging path %q", file.BaiduStagingPath)
+		}
 		filesByID[file.FileID] = file
+		filesByRemotePath[file.BaiduStagingPath] = file
 	}
 	if len(batch.LocalObjects) != len(batch.Files) {
 		return fmt.Errorf("cleanup batch %q has %d local objects for %d files", batch.BatchID, len(batch.LocalObjects), len(batch.Files))
@@ -132,8 +140,29 @@ func (e *Engine) cleanupBatch(ctx context.Context, batch state.CleanupBatch) err
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		err := e.Remote.DeleteStagingPath(ctx, batch.BaiduObject.ObjectPath)
-		if err != nil && !errors.Is(err, baidu.ErrStagingNotFound) {
+		items, err := e.Remote.ListStagingPathForCleanup(ctx, batch.BaiduObject.ObjectPath)
+		if errors.Is(err, baidu.ErrStagingNotFound) {
+			if markErr := e.Repository.MarkBaiduBatchCleanupDone(ctx, batch.TaskID, batch.BatchID); markErr != nil {
+				return fmt.Errorf("persist already-missing Baidu batch %q: %w", batch.BatchID, markErr)
+			}
+			return nil
+		}
+		if err != nil {
+			_ = e.Repository.RecordBaiduBatchCleanupFailure(context.Background(), batch.TaskID, batch.BatchID, err.Error())
+			return fmt.Errorf("inspect Baidu staging batch %q before cleanup: %w", batch.BatchID, err)
+		}
+		for _, item := range items {
+			expected, ok := filesByRemotePath[item.Path]
+			if !ok || item.IsDir || item.Size != expected.Size {
+				err := fmt.Errorf("Baidu staging batch %q contains an unexpected or changed object at %q", batch.BatchID, item.Path)
+				_ = e.Repository.RecordBaiduBatchCleanupFailure(context.Background(), batch.TaskID, batch.BatchID, err.Error())
+				return err
+			}
+		}
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if err := e.Remote.DeleteStagingPath(ctx, batch.BaiduObject.ObjectPath); err != nil && !errors.Is(err, baidu.ErrStagingNotFound) {
 			_ = e.Repository.RecordBaiduBatchCleanupFailure(context.Background(), batch.TaskID, batch.BatchID, err.Error())
 			return fmt.Errorf("remove Baidu staging batch %q: %w", batch.BatchID, err)
 		}
