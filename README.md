@@ -1,0 +1,29 @@
+# Baidu Drive Mover
+
+Windows CLI tool for moving arbitrary Baidu Netdisk share links to Google Drive with resumable staged transfer.
+
+## Product goal
+
+Normal use should be:
+
+1. Run `BaiduDriveMover.exe`.
+2. Paste any Baidu share link.
+3. If the link does not contain an extraction code and one is required, enter it in CLI.
+4. Leave the program running. It automatically scans, stages, downloads, uploads, verifies, cleans temporary data, and continues.
+5. Stop at any time with Ctrl+C. Restart later and continue from persisted state.
+
+## Hard rules
+
+- Single user-facing entry point: `BaiduDriveMover.exe`.
+- Runtime files may only exist under `temp/` beside the executable.
+- No registry writes.
+- No Windows scheduled tasks.
+- No AppData / LocalAppData / user-profile config files.
+- No modification of the user's normal Chrome profile.
+- No deletion of unrelated Baidu Netdisk files.
+- Google Drive is the final destination and source of truth for completion.
+- Original logical directory tree must be preserved.
+- A file is not considered complete until Google Drive verification succeeds.
+- The pipeline must be resumable and idempotent.
+
+See `docs/` for the fixed architecture and implementation plan.
