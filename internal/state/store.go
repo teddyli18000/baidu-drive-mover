@@ -1,0 +1,212 @@
+package state
+
+import (
+	"context"
+	"database/sql"
+	"errors"
+	"fmt"
+	"time"
+
+	_ "modernc.org/sqlite"
+)
+
+const schemaVersion = 1
+
+type Store struct {
+	db *sql.DB
+}
+
+func Open(path string) (*Store, error) {
+	if path == "" {
+		return nil, errors.New("state database path is empty")
+	}
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		return nil, fmt.Errorf("open sqlite: %w", err)
+	}
+	db.SetMaxOpenConns(1)
+	for _, pragma := range []string{
+		"PRAGMA foreign_keys = ON",
+		"PRAGMA journal_mode = WAL",
+		"PRAGMA busy_timeout = 5000",
+	} {
+		if _, err := db.Exec(pragma); err != nil {
+			db.Close()
+			return nil, fmt.Errorf("configure sqlite (%s): %w", pragma, err)
+		}
+	}
+	store := &Store{db: db}
+	if err := store.migrate(context.Background()); err != nil {
+		db.Close()
+		return nil, err
+	}
+	return store, nil
+}
+
+func (s *Store) Close() error {
+	if s == nil || s.db == nil {
+		return nil
+	}
+	return s.db.Close()
+}
+
+func (s *Store) migrate(ctx context.Context) error {
+	if _, err := s.db.ExecContext(ctx, `
+CREATE TABLE IF NOT EXISTS schema_migrations (
+    version INTEGER PRIMARY KEY,
+    applied_at TEXT NOT NULL
+);`); err != nil {
+		return fmt.Errorf("create migration table: %w", err)
+	}
+
+	var current int
+	if err := s.db.QueryRowContext(ctx, `SELECT COALESCE(MAX(version), 0) FROM schema_migrations`).Scan(&current); err != nil {
+		return fmt.Errorf("read schema version: %w", err)
+	}
+	if current > schemaVersion {
+		return fmt.Errorf("database schema %d is newer than supported %d", current, schemaVersion)
+	}
+	if current == schemaVersion {
+		return nil
+	}
+
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin schema migration: %w", err)
+	}
+	defer tx.Rollback()
+
+	if current < 1 {
+		if err := migrationV1(ctx, tx); err != nil {
+			return err
+		}
+		if _, err := tx.ExecContext(ctx, `INSERT INTO schema_migrations(version, applied_at) VALUES(1, ?)`, time.Now().UTC().Format(time.RFC3339Nano)); err != nil {
+			return fmt.Errorf("record schema migration: %w", err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit schema migration: %w", err)
+	}
+	return nil
+}
+
+func migrationV1(ctx context.Context, tx *sql.Tx) error {
+	statements := []string{
+		`CREATE TABLE tasks (
+    id TEXT PRIMARY KEY,
+    share_url TEXT NOT NULL,
+    extraction_code TEXT NOT NULL DEFAULT '',
+    status TEXT NOT NULL,
+    drive_root_id TEXT NOT NULL DEFAULT '',
+    last_error TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);`,
+		`CREATE TABLE directories (
+    task_id TEXT NOT NULL,
+    logical_path TEXT NOT NULL,
+    drive_id TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    PRIMARY KEY(task_id, logical_path),
+    FOREIGN KEY(task_id) REFERENCES tasks(id) ON DELETE CASCADE
+);`,
+		`CREATE TABLE files (
+    task_id TEXT NOT NULL,
+    file_id TEXT NOT NULL,
+    logical_path TEXT NOT NULL,
+    parent_path TEXT NOT NULL,
+    name TEXT NOT NULL,
+    size INTEGER NOT NULL DEFAULT 0 CHECK(size >= 0),
+    md5 TEXT NOT NULL DEFAULT '',
+    status TEXT NOT NULL,
+    baidu_staging_path TEXT NOT NULL DEFAULT '',
+    local_cache_path TEXT NOT NULL DEFAULT '',
+    drive_id TEXT NOT NULL DEFAULT '',
+    retry_count INTEGER NOT NULL DEFAULT 0 CHECK(retry_count >= 0),
+    last_error TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    PRIMARY KEY(task_id, file_id),
+    UNIQUE(task_id, logical_path),
+    FOREIGN KEY(task_id) REFERENCES tasks(id) ON DELETE CASCADE
+);`,
+		`CREATE TABLE batches (
+    task_id TEXT NOT NULL,
+    batch_id TEXT NOT NULL,
+    logical_parent TEXT NOT NULL,
+    status TEXT NOT NULL,
+    file_count INTEGER NOT NULL DEFAULT 0 CHECK(file_count >= 0),
+    total_bytes INTEGER NOT NULL DEFAULT 0 CHECK(total_bytes >= 0),
+    retry_count INTEGER NOT NULL DEFAULT 0 CHECK(retry_count >= 0),
+    last_error TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    PRIMARY KEY(task_id, batch_id),
+    FOREIGN KEY(task_id) REFERENCES tasks(id) ON DELETE CASCADE
+);`,
+		`CREATE TABLE owned_objects (
+    task_id TEXT NOT NULL,
+    scope TEXT NOT NULL,
+    object_id TEXT NOT NULL,
+    object_path TEXT NOT NULL DEFAULT '',
+    cleanup_allowed INTEGER NOT NULL DEFAULT 0 CHECK(cleanup_allowed IN (0,1)),
+    created_at TEXT NOT NULL,
+    PRIMARY KEY(task_id, scope, object_id),
+    FOREIGN KEY(task_id) REFERENCES tasks(id) ON DELETE CASCADE
+);`,
+		`CREATE INDEX idx_files_task_status ON files(task_id, status);`,
+		`CREATE INDEX idx_batches_task_status ON batches(task_id, status);`,
+	}
+	for _, stmt := range statements {
+		if _, err := tx.ExecContext(ctx, stmt); err != nil {
+			return fmt.Errorf("apply schema v1: %w", err)
+		}
+	}
+	return nil
+}
+
+func (s *Store) CreateTask(ctx context.Context, task Task) error {
+	if task.ID == "" || task.ShareURL == "" {
+		return errors.New("task ID and share URL are required")
+	}
+	now := time.Now().UTC()
+	if task.Status == "" {
+		task.Status = TaskNew
+	}
+	_, err := s.db.ExecContext(ctx, `
+INSERT INTO tasks(id, share_url, extraction_code, status, drive_root_id, last_error, created_at, updated_at)
+VALUES(?, ?, ?, ?, ?, ?, ?, ?)`, task.ID, task.ShareURL, task.ExtractionCode, task.Status, task.DriveRootID, task.LastError, now.Format(time.RFC3339Nano), now.Format(time.RFC3339Nano))
+	if err != nil {
+		return fmt.Errorf("create task: %w", err)
+	}
+	return nil
+}
+
+func (s *Store) GetTask(ctx context.Context, id string) (Task, error) {
+	var task Task
+	var created, updated string
+	err := s.db.QueryRowContext(ctx, `
+SELECT id, share_url, extraction_code, status, drive_root_id, last_error, created_at, updated_at
+FROM tasks WHERE id = ?`, id).Scan(&task.ID, &task.ShareURL, &task.ExtractionCode, &task.Status, &task.DriveRootID, &task.LastError, &created, &updated)
+	if err != nil {
+		return Task{}, err
+	}
+	task.CreatedAt, err = time.Parse(time.RFC3339Nano, created)
+	if err != nil {
+		return Task{}, fmt.Errorf("parse task created_at: %w", err)
+	}
+	task.UpdatedAt, err = time.Parse(time.RFC3339Nano, updated)
+	if err != nil {
+		return Task{}, fmt.Errorf("parse task updated_at: %w", err)
+	}
+	return task, nil
+}
+
+func (s *Store) SchemaVersion(ctx context.Context) (int, error) {
+	var version int
+	if err := s.db.QueryRowContext(ctx, `SELECT COALESCE(MAX(version), 0) FROM schema_migrations`).Scan(&version); err != nil {
+		return 0, err
+	}
+	return version, nil
+}
