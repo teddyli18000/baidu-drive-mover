@@ -67,7 +67,7 @@ func TestBaseCommandCannotSmuggleSandboxOrRootOverrides(t *testing.T) {
 	}
 	bad := [][]string{
 		{"--config", `C:\outside.conf`},
-		{"--cache-dir=C:\outside"},
+		{`--cache-dir=C:\outside`},
 		{"--temp-dir", `C:\outside`},
 		{"--drive-root-folder-id=other-root"},
 	}
