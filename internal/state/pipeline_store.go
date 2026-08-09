@@ -6,29 +6,30 @@ import (
 )
 
 type PipelineProgress struct {
-	Total           int
-	Discovered      int
-	Planned         int
-	BaiduStaging    int
-	BaiduStaged     int
-	Downloading     int
-	LocalReady      int
-	DriveUploading  int
-	DriveUploaded   int
-	DriveVerified   int
-	CleanupPending  int
-	Done            int
-	FailedRetryable int
-	FailedPermanent int
-	ReservedCache   int64
-	DriveRootReady  bool
+	Total                   int
+	Discovered              int
+	Planned                 int
+	BaiduStaging            int
+	BaiduStaged             int
+	Downloading             int
+	LocalReady              int
+	DriveUploading          int
+	DriveUploaded           int
+	DriveVerified           int
+	CleanupPending          int
+	Done                    int
+	FailedRetryable         int
+	FailedPermanent         int
+	ReservedCache           int64
+	DriveRootReady          bool
+	BaiduTaskRootRegistered bool
+	BaiduTaskRootCleaned    bool
 }
 
 func (p PipelineProgress) Complete() bool {
-	if p.Total == 0 {
-		return p.DriveRootReady
-	}
-	return p.Done == p.Total
+	filesDone := p.Total == 0 || p.Done == p.Total
+	baiduClean := !p.BaiduTaskRootRegistered || p.BaiduTaskRootCleaned
+	return filesDone && p.DriveRootReady && baiduClean
 }
 
 func (p PipelineProgress) HasDriveWork() bool {
@@ -44,7 +45,11 @@ func (p PipelineProgress) HasStageWork() bool {
 }
 
 func (p PipelineProgress) HasCleanupWork() bool {
-	return p.DriveVerified+p.CleanupPending > 0
+	if p.DriveVerified+p.CleanupPending > 0 {
+		return true
+	}
+	filesDone := p.Total == 0 || p.Done == p.Total
+	return filesDone && p.BaiduTaskRootRegistered && !p.BaiduTaskRootCleaned
 }
 
 func (s *Store) PipelineProgress(ctx context.Context, taskID string) (PipelineProgress, error) {
@@ -107,5 +112,11 @@ GROUP BY status`, taskID)
 		return PipelineProgress{}, err
 	}
 	progress.DriveRootReady = task.DriveRootID != "" && task.DriveRootName != ""
+	registered, cleaned, err := s.BaiduTaskRootCleanupState(ctx, taskID)
+	if err != nil {
+		return PipelineProgress{}, err
+	}
+	progress.BaiduTaskRootRegistered = registered
+	progress.BaiduTaskRootCleaned = cleaned
 	return progress, nil
 }
