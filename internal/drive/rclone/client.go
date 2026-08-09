@@ -9,6 +9,7 @@ import (
 )
 
 type Client struct {
+	layout *runtimepath.Layout
 	runner Runner
 	exe    string
 	config string
@@ -42,29 +43,25 @@ func NewClient(layout *runtimepath.Layout, runner Runner) (*Client, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Client{runner: runner, exe: exe, config: config, cache: cache, temp: temp}, nil
+	return &Client{layout: layout, runner: runner, exe: exe, config: config, cache: cache, temp: temp}, nil
 }
 
 func (c *Client) CheckVersion(ctx context.Context) error {
-	if c == nil {
+	if c == nil || c.layout == nil {
 		return fmt.Errorf("rclone client is nil")
 	}
-	layout, err := runtimepath.NewFromContainedPaths(c.exe, c.config, c.cache, c.temp)
-	if err != nil {
-		return err
-	}
-	if err := VerifyInstalledExecutable(layout); err != nil {
+	if err := VerifyInstalledExecutable(c.layout); err != nil {
 		return err
 	}
 	result, err := c.run(ctx, "version", false, "", nil)
 	if err != nil {
 		return fmt.Errorf("run pinned rclone version check: %w", err)
 	}
-	firstLine := strings.TrimSpace(result.Stdout)
-	if firstLine == "" {
-		firstLine = strings.TrimSpace(result.Stderr)
+	output := strings.TrimSpace(result.Stdout)
+	if output == "" {
+		output = strings.TrimSpace(result.Stderr)
 	}
-	if !strings.Contains(firstLine, "rclone "+Version) {
+	if !strings.Contains(output, "rclone "+Version) {
 		return fmt.Errorf("unexpected rclone version output")
 	}
 	return nil
