@@ -15,7 +15,10 @@ func TestEnsureCreatesOnlyTempTree(t *testing.T) {
 	if err := layout.Ensure(); err != nil {
 		t.Fatal(err)
 	}
-	for _, p := range []string{layout.Temp, layout.Auth, layout.ChromeProfile, layout.BrowserTemp, layout.BrowserCache, layout.Cache, layout.Logs, layout.Tasks, layout.Tools} {
+	for _, p := range []string{
+		layout.Temp, layout.Auth, layout.ChromeProfile, layout.BrowserTemp, layout.BrowserCache,
+		layout.Cache, layout.Logs, layout.Tasks, layout.Tools, layout.RcloneCache, layout.RcloneTemp, layout.RcloneToolDir,
+	} {
 		info, err := os.Stat(p)
 		if err != nil {
 			t.Fatalf("expected %s: %v", p, err)
@@ -25,6 +28,11 @@ func TestEnsureCreatesOnlyTempTree(t *testing.T) {
 		}
 		if !isWithin(layout.Temp, p, true) {
 			t.Fatalf("created path outside temp: %s", p)
+		}
+	}
+	for _, p := range []string{layout.RcloneExe, layout.RcloneConfig} {
+		if !isWithin(layout.Temp, p, false) {
+			t.Fatalf("rclone runtime file path escapes temp: %s", p)
 		}
 	}
 }
