@@ -1,0 +1,48 @@
+name: v0.5 rclone Windows acceptance
+
+on:
+  push:
+    branches: [dev/v0.5-google-drive]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  accept-pinned-helper:
+    runs-on: windows-latest
+    timeout-minutes: 10
+    steps:
+      - name: Download exact official archive
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $url = 'https://downloads.rclone.org/v1.74.4/rclone-v1.74.4-windows-amd64.zip'
+          Invoke-WebRequest -Uri $url -OutFile rclone.zip -MaximumRedirection 5
+      - name: Verify archive SHA-256
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $expected = 'ef097ef9de37a57feb7d9f9c7afb34148ad3c65be8025f1d8f7f521554a701ea'
+          $actual = (Get-FileHash rclone.zip -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($actual -ne $expected) { throw "archive hash mismatch: $actual" }
+      - name: Extract exact helper and verify executable SHA-256
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Expand-Archive -Path rclone.zip -DestinationPath unpack
+          $exe = Join-Path $PWD 'unpack/rclone-v1.74.4-windows-amd64/rclone.exe'
+          if (-not (Test-Path -LiteralPath $exe -PathType Leaf)) { throw 'expected rclone.exe missing' }
+          $expected = '492648a3867dbc620188a305e05ff3216aecbf4622bf1a6b5b978ed9c939e18c'
+          $actual = (Get-FileHash -LiteralPath $exe -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($actual -ne $expected) { throw "executable hash mismatch: $actual" }
+          "RCLONE_EXE=$exe" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+      - name: Execute pinned Windows helper
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $output = & $env:RCLONE_EXE version
+          if ($LASTEXITCODE -ne 0) { throw "rclone version exited $LASTEXITCODE" }
+          $first = ($output | Select-Object -First 1).Trim()
+          if ($first -ne 'rclone v1.74.4') { throw "unexpected version: $first" }
+          Write-Host $first
