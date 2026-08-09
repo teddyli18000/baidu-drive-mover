@@ -13,7 +13,7 @@ import (
 )
 
 var (
-	ErrRangeNotHonored      = errors.New("Baidu download server did not honor resume range")
+	ErrRangeNotHonored     = errors.New("Baidu download server did not honor resume range")
 	ErrRangeNotSatisfiable = errors.New("Baidu download range is not satisfiable")
 )
 

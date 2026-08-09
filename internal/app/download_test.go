@@ -127,7 +127,7 @@ func TestDownloadRunnerReportsWatermarkPauseWithoutFailure(t *testing.T) {
 		CookieStore:   cookieStore,
 		Output:        &bytes.Buffer{},
 		MaxCacheBytes: 5,
-		NewClient: func(string) (DownloadBaiduAPI, error) { return api, nil },
+		NewClient:     func(string) (DownloadBaiduAPI, error) { return api, nil },
 	}
 	_, err := runner.Run(context.Background(), taskID)
 	var oversized *download.OversizedCacheFileError
