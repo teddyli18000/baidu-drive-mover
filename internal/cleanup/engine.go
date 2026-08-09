@@ -68,6 +68,9 @@ func (e *Engine) Run(ctx context.Context, taskID string) (Summary, error) {
 		if err != nil {
 			return summary, err
 		}
+		if err := ctx.Err(); err != nil {
+			return summary, err
+		}
 		if err := e.cleanupBatch(ctx, batch); err != nil {
 			return summary, err
 		}
@@ -106,6 +109,9 @@ func (e *Engine) cleanupBatch(ctx context.Context, batch state.CleanupBatch) err
 		return fmt.Errorf("cleanup batch %q has %d local objects for %d files", batch.BatchID, len(batch.LocalObjects), len(batch.Files))
 	}
 	for _, object := range batch.LocalObjects {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		file, ok := filesByID[object.ObjectID]
 		if !ok {
 			return fmt.Errorf("cleanup local object %q has no matching batch file", object.ObjectID)
@@ -123,6 +129,9 @@ func (e *Engine) cleanupBatch(ctx context.Context, batch state.CleanupBatch) err
 	}
 
 	if batch.BaiduObject.CleanedAt == "" {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		err := e.Remote.DeleteStagingPath(ctx, batch.BaiduObject.ObjectPath)
 		if err != nil && !errors.Is(err, baidu.ErrStagingNotFound) {
 			_ = e.Repository.RecordBaiduBatchCleanupFailure(context.Background(), batch.TaskID, batch.BatchID, err.Error())
@@ -136,6 +145,9 @@ func (e *Engine) cleanupBatch(ctx context.Context, batch state.CleanupBatch) err
 }
 
 func (e *Engine) cleanupTaskRoot(ctx context.Context, taskID string) (bool, error) {
+	if err := ctx.Err(); err != nil {
+		return false, err
+	}
 	candidate, err := e.Repository.TaskRootCleanupCandidate(ctx, taskID)
 	if err != nil {
 		return false, err
@@ -149,6 +161,9 @@ func (e *Engine) cleanupTaskRoot(ctx context.Context, taskID string) (bool, erro
 	}
 	if object.CleanedAt != "" {
 		return true, nil
+	}
+	if err := ctx.Err(); err != nil {
+		return false, err
 	}
 	items, err := e.Remote.ListStagingPathForCleanup(ctx, object.ObjectPath)
 	if errors.Is(err, baidu.ErrStagingNotFound) {
@@ -164,6 +179,9 @@ func (e *Engine) cleanupTaskRoot(ctx context.Context, taskID string) (bool, erro
 	if len(items) != 0 {
 		err := fmt.Errorf("Baidu task root contains %d unexpected objects", len(items))
 		_ = e.Repository.RecordBaiduTaskRootCleanupFailure(context.Background(), taskID, err.Error())
+		return false, err
+	}
+	if err := ctx.Err(); err != nil {
 		return false, err
 	}
 	if err := e.Remote.DeleteStagingPath(ctx, object.ObjectPath); err != nil && !errors.Is(err, baidu.ErrStagingNotFound) {
