@@ -17,12 +17,11 @@ import (
 )
 
 type fakeRemote struct {
-	mu          sync.Mutex
-	dirs        map[string]map[string]baidu.RemoteFile
-	source      map[int64]baidu.RemoteFile
-	calls       []int
-	transferFn  func(*fakeRemote, []int64, string) error
-	ensureCalls int
+	mu         sync.Mutex
+	dirs       map[string]map[string]baidu.RemoteFile
+	source     map[int64]baidu.RemoteFile
+	calls      []int
+	transferFn func(*fakeRemote, []int64, string) error
 }
 
 func newFakeRemote(source map[int64]baidu.RemoteFile) *fakeRemote {
@@ -32,7 +31,6 @@ func newFakeRemote(source map[int64]baidu.RemoteFile) *fakeRemote {
 func (r *fakeRemote) EnsureStagingDirectory(_ context.Context, remotePath string) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	r.ensureCalls++
 	if r.dirs[remotePath] == nil {
 		r.dirs[remotePath] = make(map[string]baidu.RemoteFile)
 	}
@@ -85,8 +83,7 @@ func TestExecutorSplitsToServiceLimitAndStagesEveryFile(t *testing.T) {
 		r.add(ids, remotePath)
 		return nil
 	}
-	executor := testExecutor(store, remote)
-	if err := executor.Run(context.Background(), batch.TaskID); err != nil {
+	if err := testExecutor(store, remote).Run(context.Background(), batch.TaskID); err != nil {
 		t.Fatal(err)
 	}
 	if got := remote.calls; len(got) != 4 || got[0] != 120 || got[1] != 50 || got[2] != 50 || got[3] != 20 {
@@ -108,8 +105,7 @@ func TestExecutorReconcilesPartialSuccessBeforeRetry(t *testing.T) {
 		r.add(ids, remotePath)
 		return nil
 	}
-	executor := testExecutor(store, remote)
-	if err := executor.Run(context.Background(), batch.TaskID); err != nil {
+	if err := testExecutor(store, remote).Run(context.Background(), batch.TaskID); err != nil {
 		t.Fatal(err)
 	}
 	if got := remote.calls; len(got) != 2 || got[0] != 3 || got[1] != 2 {
@@ -132,12 +128,12 @@ func TestExecutorDoesNotSplitGenericNoProgressFailureStorm(t *testing.T) {
 	if len(remote.calls) != 3 {
 		t.Fatalf("generic outage should not recursively split; calls=%v", remote.calls)
 	}
-	var status state.BatchStatus
-	if err := storeRawQuery(store, `SELECT status FROM batches WHERE task_id = ? AND batch_id = ?`, batch.TaskID, batch.BatchID).Scan(&status); err != nil {
+	stored, err := store.GetBatch(context.Background(), batch.TaskID, batch.BatchID)
+	if err != nil {
 		t.Fatal(err)
 	}
-	if status != state.BatchFailedRetryable {
-		t.Fatalf("status=%s want=%s", status, state.BatchFailedRetryable)
+	if stored.Status != state.BatchFailedRetryable {
+		t.Fatalf("status=%s want=%s", stored.Status, state.BatchFailedRetryable)
 	}
 }
 
@@ -147,8 +143,7 @@ func TestExecutorBlocksOnUnexpectedObjectInToolBatch(t *testing.T) {
 	remote.dirs[batch.BaiduStagingPath] = map[string]baidu.RemoteFile{
 		"ghost.bin": {Name: "ghost.bin", Path: batch.BaiduStagingPath + "/ghost.bin", Size: 1},
 	}
-	executor := testExecutor(store, remote)
-	err := executor.Run(context.Background(), batch.TaskID)
+	err := testExecutor(store, remote).Run(context.Background(), batch.TaskID)
 	var conflict *baidu.StagingConflictError
 	if !errors.As(err, &conflict) {
 		t.Fatalf("expected permanent staging conflict, got %v", err)
@@ -156,15 +151,15 @@ func TestExecutorBlocksOnUnexpectedObjectInToolBatch(t *testing.T) {
 	if len(remote.calls) != 0 {
 		t.Fatalf("conflict should block before transfer, calls=%v", remote.calls)
 	}
-	var batchStatus state.BatchStatus
-	if err := storeRawQuery(store, `SELECT status FROM batches WHERE task_id = ? AND batch_id = ?`, batch.TaskID, batch.BatchID).Scan(&batchStatus); err != nil {
+	stored, err := store.GetBatch(context.Background(), batch.TaskID, batch.BatchID)
+	if err != nil {
 		t.Fatal(err)
 	}
-	if batchStatus != state.BatchFailedPermanent {
-		t.Fatalf("batch status=%s", batchStatus)
+	if stored.Status != state.BatchFailedPermanent {
+		t.Fatalf("batch status=%s", stored.Status)
 	}
-	var failed int
-	if err := storeRawQuery(store, `SELECT COUNT(*) FROM files WHERE task_id = ? AND status = ?`, batch.TaskID, state.FileFailedPermanent).Scan(&failed); err != nil {
+	failed, err := store.CountFilesByStatus(context.Background(), batch.TaskID, state.FileFailedPermanent)
+	if err != nil {
 		t.Fatal(err)
 	}
 	if failed != 2 {
@@ -176,17 +171,15 @@ func TestExecutorSingleFileTransferConflictIsPermanent(t *testing.T) {
 	store, batch, source := stagingFixture(t, 1)
 	remote := newFakeRemote(source)
 	remote.transferFn = func(_ *fakeRemote, _ []int64, _ string) error { return baidu.ErrTransferConflict }
-	executor := testExecutor(store, remote)
-	err := executor.Run(context.Background(), batch.TaskID)
-	if err == nil {
+	if err := testExecutor(store, remote).Run(context.Background(), batch.TaskID); err == nil {
 		t.Fatal("expected single-file conflict")
 	}
-	var status state.BatchStatus
-	if err := storeRawQuery(store, `SELECT status FROM batches WHERE task_id = ? AND batch_id = ?`, batch.TaskID, batch.BatchID).Scan(&status); err != nil {
+	stored, err := store.GetBatch(context.Background(), batch.TaskID, batch.BatchID)
+	if err != nil {
 		t.Fatal(err)
 	}
-	if status != state.BatchFailedPermanent {
-		t.Fatalf("status=%s want=%s", status, state.BatchFailedPermanent)
+	if stored.Status != state.BatchFailedPermanent {
+		t.Fatalf("status=%s want=%s", stored.Status, state.BatchFailedPermanent)
 	}
 }
 
@@ -229,36 +222,24 @@ func testExecutor(store *state.Store, remote *fakeRemote) *Executor {
 		Link:        link,
 		Share:       baidu.ShareContext{BDSToken: "fake-token", ShareID: "1", ShareUK: "2"},
 		MaxAttempts: 3,
-		Sleep: func(context.Context, time.Duration) error {
-			return nil
-		},
+		Sleep:       func(context.Context, time.Duration) error { return nil },
 	}
 }
 
 func assertBatchFullyStaged(t *testing.T, store *state.Store, taskID, batchID string, want int) {
 	t.Helper()
-	var batchStatus state.BatchStatus
-	if err := storeRawQuery(store, `SELECT status FROM batches WHERE task_id = ? AND batch_id = ?`, taskID, batchID).Scan(&batchStatus); err != nil {
+	stored, err := store.GetBatch(context.Background(), taskID, batchID)
+	if err != nil {
 		t.Fatal(err)
 	}
-	if batchStatus != state.BatchStaged {
-		t.Fatalf("batch status=%s want=%s", batchStatus, state.BatchStaged)
+	if stored.Status != state.BatchStaged {
+		t.Fatalf("batch status=%s want=%s", stored.Status, state.BatchStaged)
 	}
-	var staged int
-	if err := storeRawQuery(store, `SELECT COUNT(*) FROM files WHERE task_id = ? AND status = ?`, taskID, state.FileBaiduStaged).Scan(&staged); err != nil {
+	staged, err := store.CountFilesByStatus(context.Background(), taskID, state.FileBaiduStaged)
+	if err != nil {
 		t.Fatal(err)
 	}
 	if staged != want {
 		t.Fatalf("staged=%d want=%d", staged, want)
 	}
-}
-
-// Keep the production Store DB handle private. Tests inspect state through this
-// narrow package-local adapter added in state/testbridge_test.go.
-type rowScanner interface {
-	Scan(dest ...any) error
-}
-
-var storeRawQuery = func(*state.Store, string, ...any) rowScanner {
-	panic("storeRawQuery test bridge not installed")
 }
