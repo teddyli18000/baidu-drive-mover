@@ -64,9 +64,12 @@ func (r *StageRunner) Run(ctx context.Context, taskID string) (StageSummary, err
 	var runErr error
 	for sessionAttempt := 0; sessionAttempt < 2; sessionAttempt++ {
 		forceLogin := sessionAttempt > 0
-		api, share, err := r.prepareSession(ctx, link, task.ExtractionCode, forceLogin)
-		if err != nil {
-			runErr = err
+		api, share, sessionErr := r.prepareSession(ctx, link, task.ExtractionCode, forceLogin)
+		if sessionErr != nil {
+			if errors.Is(sessionErr, baidu.ErrAuthRequired) && sessionAttempt == 0 {
+				continue
+			}
+			runErr = sessionErr
 			break
 		}
 		executor := &staging.Executor{
