@@ -19,13 +19,18 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version: '1.26.5'
-          cache: false
-      - name: Resolve modules for bootstrap
-        run: go mod tidy
+          cache: true
+      - name: Download locked modules
+        run: go mod download
+      - name: Verify module files are tidy
+        shell: pwsh
+        run: |
+          go mod tidy
+          git diff --exit-code -- go.mod go.sum
       - name: Check formatting
         shell: pwsh
         run: |
-          $bad = gofmt -l .
+          $bad = gofmt -l ./cmd ./internal
           if ($bad) {
             Write-Error "gofmt required:`n$($bad -join "`n")"
             exit 1
@@ -50,13 +55,8 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version: '1.26.5'
-          cache: false
-      - name: Resolve modules for bootstrap
-        run: go mod tidy
-      - name: Emit go.sum for bootstrap
-        run: |
-          echo BEGIN_GO_SUM
-          cat go.sum
-          echo END_GO_SUM
+          cache: true
+      - name: Download locked modules
+        run: go mod download
       - name: Test with race detector
         run: go test -race ./... -count=1
