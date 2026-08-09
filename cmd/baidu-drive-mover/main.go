@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -121,40 +122,17 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	fmt.Fprintf(stdout, "扫描完成：%d 个文件夹，%d 个文件，共 %s。\n", stats.Directories, stats.Files, formatBytes(stats.Bytes))
 
 	const maxCacheBytes = downloadengine.DefaultMaxCacheBytes
-	reserved, err := store.ReservedCacheBytes(ctx)
-	if err != nil {
-		logger.Error("cannot calculate local cache reservation", "task_id", taskID, "error", err)
-		return 1
-	}
-	available := maxCacheBytes - reserved
-	if available <= 0 {
-		_ = store.UpdateTaskStatus(context.Background(), taskID, state.TaskBlocked, "local cache watermark is fully reserved")
-		fmt.Fprintf(stdout, "本地缓存已达到 %s 水位，任务 %s 已安全保留，未继续转存。\n", formatBytes(maxCacheBytes), taskID)
-		return 0
-	}
-
-	fmt.Fprintf(stdout, "开始转存一个受控批次（当前最多允许 %s）……\n", formatBytes(available))
 	stageRunner := &app.StageRunner{
-		Store:         store,
-		Browser:       browser,
-		Output:        stdout,
-		Logger:        logger,
-		CookieStore:   cookieStore,
-		MaxBatches:    1,
-		MaxBatchBytes: available,
+		Store:       store,
+		Browser:     browser,
+		Output:      stdout,
+		Logger:      logger,
+		CookieStore: cookieStore,
+		MaxBatches:  1,
 		NewClient: func(cookieHeader string) (app.StagingBaiduAPI, error) {
 			return baidu.NewClient(cookieHeader)
 		},
 	}
-	stageSummary, err := stageRunner.Run(ctx, taskID)
-	if err != nil {
-		logger.Error("bounded Baidu staging failed", "task_id", taskID, "error", err)
-		fmt.Fprintf(stderr, "任务 %s 已保留断点；没有自动清理任何百度文件。\n", taskID)
-		return 1
-	}
-	fmt.Fprintf(stdout, "百度暂存通过核对：当前累计 %d 个文件。\n", stageSummary.FilesStaged)
-
-	fmt.Fprintln(stdout, "开始下载到 ./temp/cache/，支持断点续传和重启恢复……")
 	downloadRunner := &app.DownloadRunner{
 		Layout:        layout,
 		Store:         store,
@@ -167,18 +145,6 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 			return baidu.NewClient(cookieHeader)
 		},
 	}
-	downloadSummary, err := downloadRunner.Run(ctx, taskID)
-	if err != nil {
-		logger.Error("Baidu download pass failed", "task_id", taskID, "error", err)
-		fmt.Fprintf(stderr, "任务 %s 已保留下载断点；下次恢复会重新校验已有缓存。\n", taskID)
-		return 1
-	}
-	fmt.Fprintf(stdout, "本轮下载完成：%d 个文件，%s 已通过本地校验。\n", downloadSummary.FilesReady, formatBytes(downloadSummary.BytesReady))
-	if downloadSummary.PausedByWatermark {
-		fmt.Fprintf(stdout, "已达到 %s 本地缓存水位，后续百度转存会保持暂停。\n", formatBytes(maxCacheBytes))
-	}
-
-	fmt.Fprintln(stdout, "开始重建 Google Drive 目录树并上传本轮本地文件；每个文件上传后会独立核对 ID、大小和 MD5……")
 	driveRunner := &app.DriveRunner{
 		Layout:     layout,
 		Store:      store,
@@ -187,14 +153,55 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		Process:    rclone.OSRunner{},
 		HTTPClient: rclone.SecureHTTPClient(),
 	}
-	driveSummary, err := driveRunner.Run(ctx, taskID)
+	cleanupRunner := &app.CleanupRunner{
+		Layout:      layout,
+		Store:       store,
+		Browser:     browser,
+		Output:      stdout,
+		Logger:      logger,
+		CookieStore: cookieStore,
+		MaxBatches:  8,
+		NewClient: func(cookieHeader string) (app.CleanupBaiduAPI, error) {
+			return baidu.NewClient(cookieHeader)
+		},
+	}
+
+	pipeline := &app.PipelineRunner{
+		State:         store,
+		Logger:        logger,
+		MaxCacheBytes: maxCacheBytes,
+		Cleanup:       cleanupRunner.Run,
+		Drive:         driveRunner.Run,
+		Download:      downloadRunner.Run,
+		Stage: func(passCtx context.Context, passTaskID string, maxBatchBytes int64) (app.StageSummary, error) {
+			stageRunner.MaxBatchBytes = maxBatchBytes
+			return stageRunner.Run(passCtx, passTaskID)
+		},
+	}
+
+	fmt.Fprintf(stdout, "开始完整流水线：百度暂存 → 本地断点下载 → Drive 核验 → 工具自有暂存清理；本地缓存水位 %s。\n", formatBytes(maxCacheBytes))
+	pipelineSummary, err := pipeline.Run(ctx, taskID)
 	if err != nil {
-		logger.Error("Google Drive pass failed", "task_id", taskID, "error", err)
-		fmt.Fprintf(stderr, "任务 %s 已保留全部百度暂存、本地缓存和 Drive 断点；未执行任何自动清理。\n", taskID)
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) || ctx.Err() != nil {
+			fmt.Fprintf(stdout, "任务 %s 已暂停，所有已持久化断点会在下次启动时继续。\n", taskID)
+			return 0
+		}
+		logger.Error("full pipeline stopped", "task_id", taskID, "error", err)
+		fmt.Fprintf(stderr, "任务 %s 已停止在安全状态；不会扩大清理范围。错误：%v\n", taskID, err)
 		return 1
 	}
-	fmt.Fprintf(stdout, "Google Drive 本轮核验完成：%d 个文件，%s；任务根目录 ID 已持久化。\n", driveSummary.FilesVerified, formatBytes(driveSummary.BytesVerified))
-	fmt.Fprintf(stdout, "任务 %s 已安全保留。当前 v0.5 不删除百度暂存，也不删除 ./temp/cache/；清理与流水线回压将在 v0.6 启用。\n", taskID)
+
+	fmt.Fprintf(stdout,
+		"任务 %s 完成：%d/%d 个文件 DONE；Drive 本轮核验 %d 个文件（%s），自动清理 %d 个暂存批次并释放 %s 本地缓存。\n",
+		taskID,
+		pipelineSummary.Final.Done,
+		pipelineSummary.Final.Total,
+		pipelineSummary.FilesVerified,
+		formatBytes(pipelineSummary.BytesVerified),
+		pipelineSummary.BatchesCleaned,
+		formatBytes(pipelineSummary.BytesFreed),
+	)
+	fmt.Fprintln(stdout, "Google Drive 目标文件不会被自动删除；百度回收站也不会被自动清空。")
 	return 0
 }
 

@@ -9,10 +9,8 @@ Normal use should be:
 1. Run `BaiduDriveMover.exe`.
 2. Paste any Baidu share link.
 3. If the link does not contain an extraction code and one is required, enter it in CLI.
-4. Leave the program running. It scans, stages, downloads, uploads, verifies, and continues from persisted state.
+4. Leave the program running. It scans, stages, downloads, uploads, verifies, cleans only its own temporary data, and continues from persisted state.
 5. Stop at any time with Ctrl+C. Restart later and resume safely.
-
-Automatic cleanup is a later milestone and is intentionally disabled in v0.5.
 
 ## Hard rules
 
@@ -26,17 +24,34 @@ Automatic cleanup is a later milestone and is intentionally disabled in v0.5.
 - Google Drive is the final destination and source of truth for completion.
 - Original logical directory tree must be preserved.
 - A file is not considered complete until Google Drive verification succeeds.
+- Cleanup is allowed only for durably registered tool-owned local/Baidu objects after Drive verification.
+- Google Drive destination objects are never cleanup targets.
+- The Baidu recycle bin is never automatically emptied.
 - The pipeline must be resumable and idempotent.
 
 ## Development status
 
-Current milestone: **v0.5 Google Drive**.
+Current milestone: **v0.6 Full Pipeline**.
 
-The pipeline now covers recursive share discovery, deterministic Baidu staging, resumable local download, Google Drive directory reconstruction, upload, crash reconciliation, and independent Drive verification.
+v0.6 closes the cooperative end-to-end pipeline:
 
-Google Drive integration uses a pinned rclone helper and a tool-owned `drive.file` OAuth remote. Each task gets its own persisted Drive root folder ID, and later task-scoped operations are constrained to that root. A file reaches `DRIVE_VERIFIED` only after the remote object is independently re-listed and its stable Drive ID, exact size, and MD5 are verified.
+```text
+share scan
+  -> bounded Baidu staging
+  -> resumable opaque local cache
+  -> Google Drive tree reconstruction/upload
+  -> independent Drive ID + size + MD5 verification
+  -> durable tool-owned cleanup
+  -> DONE
+```
 
-v0.5 deliberately does **not** delete Baidu staging files, local cache files, or Drive objects. Cleanup remains disabled until the v0.6 cleanup milestone has its own safety and recovery gates.
+The scheduler is SQLite-driven and downstream-first: verified cleanup releases cache pressure before Drive upload, download, and additional Baidu staging are pumped. If a complete pass produces no durable state change, the task stops in a blocked state rather than busy-looping.
+
+Cleanup is deliberately fail-closed. A staging batch cannot be cleaned until every file in it has a persisted Drive ID and has reached `DRIVE_VERIFIED`. One SQLite transaction changes the batch to `CLEANUP_PENDING` and authorizes only the exact registered opaque local cache files and the exact `/BaiduDriveMover/<task-id>/<batch-id>` directory. Each successful deletion is recorded independently so restart can reconcile a crash between destructive steps.
+
+The task-level `/BaiduDriveMover/<task-id>` directory is removed only after every file is `DONE`, every registered batch directory is proven cleaned, and a fresh remote listing proves the task root is empty. The global `/BaiduDriveMover` directory is never deleted.
+
+Google Drive integration continues to use pinned rclone v1.74.4 with `drive.file` OAuth and a persisted task-root folder ID. Destination Drive objects are verified but never deleted by v0.6 cleanup.
 
 Design and release gates:
 
@@ -47,6 +62,7 @@ Design and release gates:
 - `docs/SECURITY.md`
 - `docs/TESTING.md`
 - `docs/V05_GOOGLE_DRIVE.md`
+- `docs/V06_FULL_PIPELINE.md`
 - `docs/RCLONE_PIN.md`
 
 The public repository must never contain real account cookies/tokens, browser profiles, task databases, private share manifests, logs, downloaded files, or rclone OAuth configuration.

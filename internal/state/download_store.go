@@ -3,6 +3,7 @@ package state
 import (
 	"context"
 	"fmt"
+	"path"
 	"time"
 )
 
@@ -59,12 +60,24 @@ WHERE task_id = ? AND file_id = ? AND status IN (?, ?)`,
 }
 
 func (s *Store) MarkLocalReady(ctx context.Context, taskID, fileID, cachePath string) error {
+	if !stagingComponentPattern.MatchString(taskID) || !stagingComponentPattern.MatchString(fileID) {
+		return fmt.Errorf("unsafe local cache identity task=%q file=%q", taskID, fileID)
+	}
+	expected := path.Join("cache", taskID, fileID+".bin")
+	if cachePath != expected {
+		return fmt.Errorf("local-ready cache path %q does not match registered opaque path %q", cachePath, expected)
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin local-ready update: %w", err)
+	}
+	defer tx.Rollback()
 	now := time.Now().UTC().Format(time.RFC3339Nano)
-	result, err := s.db.ExecContext(ctx, `
+	result, err := tx.ExecContext(ctx, `
 UPDATE files
 SET status = ?, local_cache_path = ?, last_error = '', updated_at = ?
 WHERE task_id = ? AND file_id = ? AND status IN (?, ?, ?)`,
-		FileLocalReady, cachePath, now, taskID, fileID, FileBaiduStaged, FileDownloading, FileLocalReady)
+		FileLocalReady, expected, now, taskID, fileID, FileBaiduStaged, FileDownloading, FileLocalReady)
 	if err != nil {
 		return fmt.Errorf("mark local file ready %q: %w", fileID, err)
 	}
@@ -74,6 +87,27 @@ WHERE task_id = ? AND file_id = ? AND status IN (?, ?, ?)`,
 	}
 	if changed != 1 {
 		return fmt.Errorf("file %q is not eligible for local-ready state", fileID)
+	}
+	if _, err := tx.ExecContext(ctx, `
+INSERT INTO owned_objects(task_id, scope, object_id, object_path, cleanup_allowed, created_at)
+VALUES(?, 'local_cache_file', ?, ?, 0, ?)
+ON CONFLICT(task_id, scope, object_id) DO NOTHING`, taskID, fileID, expected, now); err != nil {
+		return fmt.Errorf("register local cache provenance for %q: %w", fileID, err)
+	}
+	var registered string
+	var cleanupAllowed int
+	var cleanedAt string
+	if err := tx.QueryRowContext(ctx, `
+SELECT object_path, cleanup_allowed, cleaned_at
+FROM owned_objects
+WHERE task_id = ? AND scope = 'local_cache_file' AND object_id = ?`, taskID, fileID).Scan(&registered, &cleanupAllowed, &cleanedAt); err != nil {
+		return fmt.Errorf("read local cache provenance for %q: %w", fileID, err)
+	}
+	if registered != expected || cleanupAllowed != 0 || cleanedAt != "" {
+		return fmt.Errorf("local cache provenance for %q is inconsistent", fileID)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit local-ready provenance for %q: %w", fileID, err)
 	}
 	return nil
 }

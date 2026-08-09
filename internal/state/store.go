@@ -10,7 +10,7 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-const schemaVersion = 3
+const schemaVersion = 4
 
 type Store struct {
 	db *sql.DB
@@ -99,6 +99,15 @@ CREATE TABLE IF NOT EXISTS schema_migrations (
 			return err
 		}
 		if err := recordMigration(ctx, tx, 3); err != nil {
+			return err
+		}
+		current = 3
+	}
+	if current < 4 {
+		if err := migrationV4(ctx, tx); err != nil {
+			return err
+		}
+		if err := recordMigration(ctx, tx, 4); err != nil {
 			return err
 		}
 	}
@@ -222,6 +231,20 @@ func migrationV3(ctx context.Context, tx *sql.Tx) error {
 	for _, stmt := range statements {
 		if _, err := tx.ExecContext(ctx, stmt); err != nil {
 			return fmt.Errorf("apply schema v3: %w", err)
+		}
+	}
+	return nil
+}
+
+func migrationV4(ctx context.Context, tx *sql.Tx) error {
+	statements := []string{
+		`ALTER TABLE owned_objects ADD COLUMN cleaned_at TEXT NOT NULL DEFAULT '';`,
+		`ALTER TABLE owned_objects ADD COLUMN last_error TEXT NOT NULL DEFAULT '';`,
+		`CREATE INDEX idx_owned_objects_cleanup ON owned_objects(task_id, scope, cleanup_allowed, cleaned_at);`,
+	}
+	for _, stmt := range statements {
+		if _, err := tx.ExecContext(ctx, stmt); err != nil {
+			return fmt.Errorf("apply schema v4: %w", err)
 		}
 	}
 	return nil
