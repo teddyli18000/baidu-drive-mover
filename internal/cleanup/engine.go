@@ -18,9 +18,14 @@ type Repository interface {
 	RecordLocalCacheCleanupFailure(ctx context.Context, taskID, fileID, message string) error
 	RecordBaiduBatchCleanupFailure(ctx context.Context, taskID, batchID, message string) error
 	CompleteBatchCleanup(ctx context.Context, taskID, batchID string) error
+	TaskRootCleanupCandidate(ctx context.Context, taskID string) (bool, error)
+	AuthorizeTaskRootCleanup(ctx context.Context, taskID string) (state.CleanupObject, error)
+	MarkBaiduTaskRootCleanupDone(ctx context.Context, taskID string) error
+	RecordBaiduTaskRootCleanupFailure(ctx context.Context, taskID, message string) error
 }
 
 type Remote interface {
+	ListStagingPathForCleanup(ctx context.Context, remotePath string) ([]baidu.RemoteFile, error)
 	DeleteStagingPath(ctx context.Context, remotePath string) error
 }
 
@@ -32,9 +37,10 @@ type Engine struct {
 }
 
 type Summary struct {
-	BatchesDone int
-	FilesDone   int
-	BytesFreed  int64
+	BatchesDone  int
+	FilesDone    int
+	BytesFreed   int64
+	TaskRootDone bool
 }
 
 func (e *Engine) Run(ctx context.Context, taskID string) (Summary, error) {
@@ -55,7 +61,7 @@ func (e *Engine) Run(ctx context.Context, taskID string) (Summary, error) {
 			return summary, err
 		}
 		if len(candidates) == 0 {
-			return summary, nil
+			break
 		}
 		batch, err := e.Repository.AuthorizeBatchCleanup(ctx, taskID, candidates[0].BatchID)
 		if err != nil {
@@ -73,15 +79,36 @@ func (e *Engine) Run(ctx context.Context, taskID string) (Summary, error) {
 			summary.BytesFreed += file.Size
 		}
 	}
+	if err := ctx.Err(); err != nil {
+		return summary, err
+	}
+	rootDone, err := e.cleanupTaskRoot(ctx, taskID)
+	if err != nil {
+		return summary, err
+	}
+	summary.TaskRootDone = rootDone
 	return summary, nil
 }
 
 func (e *Engine) cleanupBatch(ctx context.Context, batch state.CleanupBatch) error {
-	for i, object := range batch.LocalObjects {
+	filesByID := make(map[string]state.File, len(batch.Files))
+	for _, file := range batch.Files {
+		if _, exists := filesByID[file.FileID]; exists {
+			return fmt.Errorf("duplicate cleanup file identity %q", file.FileID)
+		}
+		filesByID[file.FileID] = file
+	}
+	if len(batch.LocalObjects) != len(batch.Files) {
+		return fmt.Errorf("cleanup batch %q has %d local objects for %d files", batch.BatchID, len(batch.LocalObjects), len(batch.Files))
+	}
+	for _, object := range batch.LocalObjects {
+		file, ok := filesByID[object.ObjectID]
+		if !ok {
+			return fmt.Errorf("cleanup local object %q has no matching batch file", object.ObjectID)
+		}
 		if object.CleanedAt != "" {
 			continue
 		}
-		file := batch.Files[i]
 		if err := e.Layout.RemoveTempFile(object.ObjectPath); err != nil {
 			_ = e.Repository.RecordLocalCacheCleanupFailure(context.Background(), batch.TaskID, file.FileID, err.Error())
 			return fmt.Errorf("remove local cache for %q: %w", file.LogicalPath, err)
@@ -102,4 +129,45 @@ func (e *Engine) cleanupBatch(ctx context.Context, batch state.CleanupBatch) err
 		}
 	}
 	return nil
+}
+
+func (e *Engine) cleanupTaskRoot(ctx context.Context, taskID string) (bool, error) {
+	candidate, err := e.Repository.TaskRootCleanupCandidate(ctx, taskID)
+	if err != nil {
+		return false, err
+	}
+	if !candidate {
+		return false, nil
+	}
+	object, err := e.Repository.AuthorizeTaskRootCleanup(ctx, taskID)
+	if err != nil {
+		return false, err
+	}
+	if object.CleanedAt != "" {
+		return true, nil
+	}
+	items, err := e.Remote.ListStagingPathForCleanup(ctx, object.ObjectPath)
+	if errors.Is(err, baidu.ErrStagingNotFound) {
+		if markErr := e.Repository.MarkBaiduTaskRootCleanupDone(ctx, taskID); markErr != nil {
+			return false, fmt.Errorf("persist already-missing Baidu task root: %w", markErr)
+		}
+		return true, nil
+	}
+	if err != nil {
+		_ = e.Repository.RecordBaiduTaskRootCleanupFailure(context.Background(), taskID, err.Error())
+		return false, fmt.Errorf("inspect Baidu task root before cleanup: %w", err)
+	}
+	if len(items) != 0 {
+		err := fmt.Errorf("Baidu task root contains %d unexpected objects", len(items))
+		_ = e.Repository.RecordBaiduTaskRootCleanupFailure(context.Background(), taskID, err.Error())
+		return false, err
+	}
+	if err := e.Remote.DeleteStagingPath(ctx, object.ObjectPath); err != nil && !errors.Is(err, baidu.ErrStagingNotFound) {
+		_ = e.Repository.RecordBaiduTaskRootCleanupFailure(context.Background(), taskID, err.Error())
+		return false, fmt.Errorf("remove empty Baidu task root: %w", err)
+	}
+	if err := e.Repository.MarkBaiduTaskRootCleanupDone(ctx, taskID); err != nil {
+		return false, fmt.Errorf("persist Baidu task-root cleanup: %w", err)
+	}
+	return true, nil
 }
