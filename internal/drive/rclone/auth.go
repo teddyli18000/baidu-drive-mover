@@ -3,6 +3,7 @@ package rclone
 import (
 	"bufio"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -11,6 +12,8 @@ import (
 )
 
 const maxConfigBytes = int64(4 << 20)
+
+var ErrDriveAuthRequired = errors.New("Google Drive authorization required")
 
 type RemotePolicy struct {
 	Type  string
@@ -104,6 +107,48 @@ func (c *Client) ReauthorizeDriveRemote(ctx context.Context) error {
 		return fmt.Errorf("rclone Drive remote disappeared after reauthorization")
 	}
 	return validateDriveRemotePolicy(policy)
+}
+
+// ProbeDrive proves that the configured token can perform a real Drive read.
+// Raw rclone diagnostics are inspected only in memory and are never returned.
+func (c *Client) ProbeDrive(ctx context.Context) error {
+	result, err := c.RunBase(ctx, "lsjson", RemoteName+":", "--dirs-only", "--max-depth", "1", "--no-modtime", "--no-mimetype")
+	if err != nil {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		if looksLikeAuthFailure(result.Stdout + "\n" + result.Stderr) {
+			return ErrDriveAuthRequired
+		}
+		return fmt.Errorf("Google Drive connectivity probe failed")
+	}
+	var items []json.RawMessage
+	if err := json.Unmarshal([]byte(result.Stdout), &items); err != nil {
+		return fmt.Errorf("Google Drive probe returned invalid metadata")
+	}
+	return nil
+}
+
+func looksLikeAuthFailure(raw string) bool {
+	lower := strings.ToLower(raw)
+	markers := []string{
+		"invalid_grant",
+		"unauthorized",
+		"authorization failed",
+		"oauth2",
+		"refresh token",
+		"token has been expired",
+		"token expired",
+		"access denied",
+		"status code: 401",
+		"http error 401",
+	}
+	for _, marker := range markers {
+		if strings.Contains(lower, marker) {
+			return true
+		}
+	}
+	return false
 }
 
 func (c *Client) driveRemoteListed(ctx context.Context) (bool, error) {
