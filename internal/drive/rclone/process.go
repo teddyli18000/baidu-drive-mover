@@ -29,7 +29,7 @@ func (r OSRunner) Run(ctx context.Context, executable string, args []string, env
 	stdout := &cappedBuffer{limit: limit}
 	stderr := &cappedBuffer{limit: limit}
 	cmd := exec.CommandContext(ctx, executable, args...)
-	cmd.Env = mergeEnvironment(os.Environ(), env)
+	cmd.Env = sandboxEnvironment(os.Environ(), env)
 	cmd.Stdout = stdout
 	cmd.Stderr = stderr
 	err := cmd.Run()
@@ -74,11 +74,23 @@ func (b *cappedBuffer) String() string {
 	return string(b.buf) + "\n[output truncated]"
 }
 
+func sandboxEnvironment(base, overrides []string) []string {
+	filtered := make([]string, 0, len(base)+len(overrides))
+	for _, existing := range base {
+		key := envKey(existing)
+		if key == "" || strings.HasPrefix(strings.ToUpper(key), "RCLONE_") {
+			continue
+		}
+		filtered = append(filtered, existing)
+	}
+	return mergeEnvironment(filtered, overrides)
+}
+
 func mergeEnvironment(base, overrides []string) []string {
 	result := append([]string(nil), base...)
 	for _, override := range overrides {
 		key := envKey(override)
-		if key == "" {
+		if key == "" || strings.HasPrefix(strings.ToUpper(key), "RCLONE_") {
 			continue
 		}
 		filtered := result[:0]
