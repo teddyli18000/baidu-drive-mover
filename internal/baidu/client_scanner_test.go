@@ -47,7 +47,7 @@ func TestAccessSharePageExtractsNestedMetadata(t *testing.T) {
 			http.NotFound(w, r)
 			return
 		}
-		fmt.Fprint(w, fakeSharePage())
+		fmt.Fprint(w, strings.ReplaceAll(fakeSharePage(), `\"`, `"`))
 	}))
 	defer server.Close()
 	client, err := NewClient("BDUSS=fake; STOKEN=fake", WithBaseURL(server.URL))
