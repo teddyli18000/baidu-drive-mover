@@ -1,0 +1,63 @@
+# Runtime root: may contain credentials, browser profile, task DB, logs and user data
+temp/
+
+# Local environment / secrets
+.env
+.env.*
+!.env.example
+*.secret
+*.secrets
+*.token
+*.cookies
+*rclone.conf
+
+# Runtime databases / journals
+*.db
+*.db-shm
+*.db-wal
+*.sqlite
+*.sqlite3
+
+# Logs and dumps
+*.log
+*.trace
+*.dump
+*.har
+
+# Browser profiles
+chrome-profile/
+user-data-dir/
+
+# Download/cache artifacts
+*.part
+*.partial
+*.tmp
+cache/
+downloads/
+
+# Build output
+bin/
+dist/
+build/
+BaiduDriveMover.exe
+*.exe
+*.msi
+*.zip
+*.7z
+
+# Go
+vendor/
+coverage.out
+coverage.html
+*.test
+
+# IDE / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Local developer scratch
+scratch/
+.local/
