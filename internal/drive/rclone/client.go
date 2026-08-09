@@ -85,6 +85,17 @@ func (c *Client) RunTask(ctx context.Context, rootID, command string, args ...st
 	return c.run(ctx, command, true, rootID, args)
 }
 
+// runSensitive executes a tightly constructed command whose stdout/stderr may
+// contain OAuth state or other authentication details. Callers get only a
+// sanitized success/failure signal; captured process output is discarded.
+func (c *Client) runSensitive(ctx context.Context, command string, args []string) error {
+	_, err := c.run(ctx, command, false, "", args)
+	if err != nil {
+		return fmt.Errorf("rclone authentication command failed")
+	}
+	return nil
+}
+
 func (c *Client) run(ctx context.Context, command string, taskScoped bool, rootID string, args []string) (Result, error) {
 	if c == nil || c.runner == nil {
 		return Result{}, fmt.Errorf("rclone client is not configured")
@@ -112,7 +123,7 @@ func (c *Client) run(ctx context.Context, command string, taskScoped bool, rootI
 
 func allowedBaseCommand(command string) bool {
 	switch command {
-	case "version", "config", "mkdir", "lsjson":
+	case "listremotes", "mkdir", "lsjson":
 		return true
 	default:
 		return false
