@@ -149,7 +149,7 @@ func (b *TreeBuilder) listNamedDirectoriesBase(ctx context.Context, logicalParen
 	if err != nil {
 		return nil, err
 	}
-	result, err := b.Remote.RunBase(ctx, "lsjson", remote, "--dirs-only", "--no-modtime", "--no-mimetype")
+	result, err := b.Remote.RunBase(ctx, "lsjson", remote, "--no-modtime", "--no-mimetype")
 	if err != nil {
 		return nil, fmt.Errorf("list Drive parent %q: %w", logicalParent, err)
 	}
@@ -161,7 +161,7 @@ func (b *TreeBuilder) listNamedDirectoriesTask(ctx context.Context, rootID, logi
 	if err != nil {
 		return nil, err
 	}
-	result, err := b.Remote.RunTask(ctx, rootID, "lsjson", remote, "--dirs-only", "--no-modtime", "--no-mimetype")
+	result, err := b.Remote.RunTask(ctx, rootID, "lsjson", remote, "--no-modtime", "--no-mimetype")
 	if err != nil {
 		return nil, fmt.Errorf("list task Drive parent %q: %w", logicalParent, err)
 	}
@@ -179,7 +179,7 @@ func exactDirectoryMatches(raw, name string) ([]remoteItem, error) {
 			continue
 		}
 		if !item.IsDir || strings.TrimSpace(item.ID) == "" {
-			return nil, fmt.Errorf("rclone returned invalid same-name Drive directory metadata")
+			return nil, fmt.Errorf("same-name Drive object is not the expected directory")
 		}
 		matches = append(matches, item)
 	}
