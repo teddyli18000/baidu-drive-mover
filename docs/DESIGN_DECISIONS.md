@@ -300,6 +300,14 @@ Reason: a live Baidu share page returned HTTP 200 with its complete `locals.mset
 
 ## D28. PAN and PCS requests use separate provider application identities
 
-Decision: authenticated PAN Web requests, including share enumeration and transfer, use application ID `250528`. Legacy PCS file operations used only for the isolated staging lifecycle (`mkdir`, `list`, and `delete`) use application ID `266719`. The IDs are distinct constants and tests assert the correct identity at each API boundary.
+Decision: authenticated PAN Web requests, including share enumeration, transfer, and same-account copy, use application ID `250528`. Legacy PCS file operations for isolated staging (`mkdir`, `list`, `download`, and `delete`) use application ID `266719`. The IDs are distinct constants and tests assert the correct identity at each API boundary.
 
 Reason: a live authenticated session returned PCS error `31030` for every read and write made with the PAN application ID. The identical bounded PCS list request made with `266719` returned the expected `31066` not-found result for an absent tool root, proving that the session and endpoint were valid but the request used the wrong provider application identity. Keeping identities endpoint-specific prevents a working share API setting from silently breaking staging and cleanup.
+
+## D29. A share owned by the logged-in account uses bounded internal copy
+
+Decision: when the authenticated account `uk` exactly equals the share owner `share_uk`, staging does not call `/share/transfer`. For each bounded subset, the client re-enumerates the share through the hardened read-only scanner, resolves every requested immutable `fs_id` to one validated provider path, and submits a one-shot PAN `filemanager copy` into the same isolated batch directory. More than 100 items are split before mutation. Normal reconciliation remains authoritative after the copy and before any later attempt.
+
+The provider source path is carried only through the in-memory manifest page used for resolution; it never replaces the share-relative logical path or becomes a Drive path. Missing, duplicate, conflicting, or unsafe source identities stop before the copy request.
+
+Reason: Baidu returns parameter error `2` when an account attempts to save its own share through `/share/transfer`, even though authentication, source listing, and the isolated destination are valid. An account-internal copy is the equivalent bounded staging operation for files the logged-in account already owns, while preserving the existing download, Drive verification, and cleanup state machine.

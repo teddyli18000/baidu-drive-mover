@@ -143,6 +143,8 @@ The terminal runtime finalizer is a separate gate. Tests must prove that it runs
 
 Share-page parser fixtures must cover direct bootstrap objects, bootstrap JSON embedded in string arrays, decoy markers before valid metadata, split-object rejection, and the embedded-depth/byte/object bounds. A fixture must not make the parser combine authentication and share identifiers from different objects.
 
+Same-account staging fixtures must prove that `uk == share_uk` resolves every requested `fs_id` through the hardened scanner before a PAN internal-copy mutation, preserves provider source paths separately from logical paths, splits above the copy limit before network I/O, rejects missing/conflicting identities without mutation, and leaves ordinary other-account `/share/transfer` behavior unchanged.
+
 Required assertions include:
 
 - migration from v0.5 never grants cleanup authority;

@@ -51,6 +51,8 @@ BaiduDriveMover.exe -version     print release identity
 
 During first Drive use, the verified pinned rclone helper is downloaded into `temp/tools/` and opens an OAuth flow for the private `drive.file` scope. Each task creates a new `BaiduDriveMover-<task-id>` Drive folder. Do not move or rename that folder before the task completes. The tool never deletes destination Drive objects.
 
+Both other-account and same-account share links use the same user flow. Other-account shares are saved into bounded isolated staging batches. If the logged-in Baidu account owns the share, the tool instead performs a bounded account-internal copy into those batches because Baidu rejects saving an account's own share through the ordinary share-transfer endpoint. Downstream download, Drive verification, and cleanup rules are identical.
+
 Successful final cleanup removes all local runtime artifacts created by the program, including its dedicated Chrome profile, stored Baidu cookies, Google OAuth configuration, managed rclone binary, caches, logs, and task database. A later migration therefore starts with fresh local authorization. If another task in the same executable folder is still non-completed, shared runtime state is retained until that task also completes.
 
 Successful `-check` and `-list` runs also remove runtime data they created when no non-completed task exists. They never discard an unfinished, blocked, or failed task merely to make a diagnostic run residue-free.

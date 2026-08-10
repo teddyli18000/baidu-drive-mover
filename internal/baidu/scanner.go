@@ -254,6 +254,7 @@ func (c *Client) Scan(ctx context.Context, taskID string, link ShareLink, share 
 				}
 				files = append(files, manifest.File{
 					SourceID:    strconv.FormatInt(item.FsID, 10),
+					SourcePath:  fullPath,
 					LogicalPath: logicalPath,
 					ParentPath:  parent,
 					Name:        name,

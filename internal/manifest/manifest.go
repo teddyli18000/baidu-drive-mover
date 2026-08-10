@@ -8,6 +8,7 @@ type Directory struct {
 
 type File struct {
 	SourceID    string
+	SourcePath  string
 	LogicalPath string
 	ParentPath  string
 	Name        string

@@ -128,6 +128,9 @@ func (c *Client) TransferFiles(ctx context.Context, link ShareLink, share ShareC
 	if err != nil {
 		return err
 	}
+	if share.UK != "" && share.UK == share.ShareUK {
+		return c.copyOwnFiles(ctx, link, share, fsIDs, clean)
+	}
 	encodedIDs, err := json.Marshal(fsIDs)
 	if err != nil {
 		return fmt.Errorf("encode Baidu transfer file IDs: %w", err)

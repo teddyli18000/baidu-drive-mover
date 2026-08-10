@@ -37,7 +37,7 @@ func (c *Client) OpenDownload(ctx context.Context, remotePath string, offset int
 		return nil, fmt.Errorf("negative Baidu download offset %d", offset)
 	}
 	query := url.Values{}
-	query.Set("app_id", panAppID)
+	query.Set("app_id", pcsAppID)
 	query.Set("method", "download")
 	query.Set("path", clean)
 	reference := &url.URL{Path: "/rest/2.0/pcs/file", RawQuery: query.Encode()}
