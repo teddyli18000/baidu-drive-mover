@@ -238,3 +238,16 @@ Priority:
 This provides continuous end-to-end progression and backpressure while keeping each existing stage independently idempotent. Controlled parallel workers may be introduced later only if the same database invariants and byte/file watermarks remain authoritative.
 
 Reason: v0.6 adds the first destructive stage. Proving cleanup/recovery correctness before increasing cross-stage concurrency reduces the chance that a scheduling race becomes a deletion bug.
+
+## D21. v0.7 retries only operations with read/reconcile semantics
+
+Decision: bounded transport retry is exposed only through explicit Baidu read helpers. Ordinary page access, share listing, and PCS staging/cleanup inspection may retry typed network failures, HTTP 429, and HTTP 5xx with capped exponential or server-directed delay.
+
+The retry helpers reject mutation methods and unknown POST endpoints before network I/O. Transfer, mkdir, password verification, and delete continue to use one-shot HTTP calls. Their stage-specific recovery must freshly reconcile durable local state with remote observations before a later mutation attempt.
+
+Consequences:
+
+- a generic HTTP layer cannot replay a transfer or deletion;
+- `Retry-After` and exponential delay remain bounded and cancellable;
+- malformed or oversized responses fail permanently instead of consuming the transient retry budget;
+- new read endpoints must opt in explicitly and add tests proving both retry bounds and mutation exclusion.

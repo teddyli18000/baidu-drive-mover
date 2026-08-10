@@ -161,6 +161,56 @@ func TestStagingBatchStateRoundTrip(t *testing.T) {
 	}
 }
 
+func TestStagingReconcileAcceptsSamePathAfterDownstreamProgress(t *testing.T) {
+	store := newStagingTestStore(t)
+	ctx := context.Background()
+	taskID := "task-partial-restart"
+	createStagingTestTask(t, store, taskID)
+	if err := store.UpsertManifestPage(ctx, taskID, nil, []manifest.File{
+		{SourceID: "1", LogicalPath: "/x/a.bin", ParentPath: "/x", Name: "a.bin", Size: 10},
+		{SourceID: "2", LogicalPath: "/x/b.bin", ParentPath: "/x", Name: "b.bin", Size: 20},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	planned, err := store.PlanBatches(ctx, taskID, 200)
+	if err != nil || len(planned) != 1 {
+		t.Fatalf("plan err=%v batches=%d", err, len(planned))
+	}
+	batch := planned[0]
+	if err := store.StartBatch(ctx, taskID, batch.BatchID); err != nil {
+		t.Fatal(err)
+	}
+	firstPath := batch.BaiduStagingPath + "/a.bin"
+	if err := store.RecordStagedFiles(ctx, taskID, batch.BatchID, map[string]string{"1": firstPath}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.StartDownload(ctx, taskID, "1", "cache/"+taskID+"/1.part"); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.MarkLocalReady(ctx, taskID, "1", "cache/"+taskID+"/1.bin"); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.RecordStagedFiles(ctx, taskID, batch.BatchID, map[string]string{
+		"1": firstPath,
+		"2": batch.BaiduStagingPath + "/b.bin",
+	}); err != nil {
+		t.Fatalf("same-path reconciliation rejected downstream file: %v", err)
+	}
+	if err := store.CompleteBatch(ctx, taskID, batch.BatchID); err != nil {
+		t.Fatalf("batch completion rejected downstream file: %v", err)
+	}
+	file, err := store.GetFile(ctx, taskID, "1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if file.Status != FileLocalReady || file.BaiduStagingPath != firstPath {
+		t.Fatalf("reconciliation rewound or rebound downstream file: %+v", file)
+	}
+	if err := store.RecordStagedFiles(ctx, taskID, batch.BatchID, map[string]string{"1": batch.BaiduStagingPath + "/other.bin"}); err == nil {
+		t.Fatal("downstream file accepted staging path rebinding")
+	}
+}
+
 func TestMigrationFromSchemaV1ToLatest(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "state.db")
 	db, err := sql.Open("sqlite", path)

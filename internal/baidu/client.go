@@ -3,6 +3,7 @@ package baidu
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -19,6 +20,8 @@ const (
 	panAppID              = "250528"
 	defaultMaxListRetries = 4
 )
+
+var errResponseTooLarge = errors.New("Baidu response exceeded size limit")
 
 type ClientOption func(*clientOptions)
 
@@ -199,6 +202,9 @@ func (c *Client) do(ctx context.Context, method, endpoint string, query, form ur
 }
 
 func (c *Client) doRead(ctx context.Context, method, endpoint string, query, form url.Values, referer string, maxBytes int64) ([]byte, int, error) {
+	if method != http.MethodGet && !(method == http.MethodPost && endpoint == "/share/list") {
+		return nil, 0, fmt.Errorf("refusing bounded read retry for %s %s", method, endpoint)
+	}
 	return c.retryRead(ctx, "Baidu read request", func() ([]byte, int, error) {
 		return c.do(ctx, method, endpoint, query, form, referer, maxBytes)
 	})
@@ -209,6 +215,9 @@ func (c *Client) doPCS(ctx context.Context, method, endpoint string, query, form
 }
 
 func (c *Client) doPCSRead(ctx context.Context, method, endpoint string, query, form url.Values, maxBytes int64) ([]byte, int, error) {
+	if method != http.MethodGet {
+		return nil, 0, fmt.Errorf("refusing bounded PCS read retry for %s %s", method, endpoint)
+	}
 	return c.retryRead(ctx, "Baidu PCS read request", func() ([]byte, int, error) {
 		return c.doPCS(ctx, method, endpoint, query, form, maxBytes)
 	})
@@ -249,6 +258,9 @@ func (c *Client) doAt(ctx context.Context, base *url.URL, method, endpoint strin
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return nil, response.StatusCode, ctxErr
 		}
+		if errors.Is(err, errResponseTooLarge) {
+			return nil, response.StatusCode, err
+		}
 		return nil, response.StatusCode, &TransientError{Operation: "read Baidu response", Status: response.StatusCode, Err: err}
 	}
 	if response.StatusCode == http.StatusTooManyRequests || response.StatusCode >= 500 {
@@ -271,7 +283,7 @@ func readLimited(reader io.Reader, maxBytes int64) ([]byte, error) {
 		return nil, fmt.Errorf("read Baidu response: %w", err)
 	}
 	if int64(len(data)) > maxBytes {
-		return nil, fmt.Errorf("Baidu response exceeded %d bytes", maxBytes)
+		return nil, fmt.Errorf("%w: limit %d bytes", errResponseTooLarge, maxBytes)
 	}
 	return data, nil
 }

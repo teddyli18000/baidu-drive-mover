@@ -109,7 +109,7 @@ Tests assert bounded request attempts and exact final manifest counts.
 
 ## Prolonged mock migration
 
-A deterministic fake migration repeatedly pumps the real state/staging/download/Drive/cleanup orchestration against fake adapters.
+The gate is split across two complementary layers: focused engine tests exercise staging reconciliation, byte-range download resume, Drive post-commit reconciliation, and cleanup already-missing behavior against fake adapters; a 5,000-file prolonged test repeatedly pumps the real `PipelineRunner` and SQLite state transitions across close/reopen restart boundaries.
 
 The test should exercise thousands of files and inject:
 
@@ -132,6 +132,8 @@ Release assertions:
 - directory tree metadata remains exact.
 
 The prolonged mock test must be deterministic and suitable for normal CI; it must not require live Baidu/Google credentials.
+
+The SQLite-backed prolonged gate uses a 64 KiB cache watermark, preserves remote-state evidence across process restarts, injects partial staging/download/Drive/cleanup failures, and verifies exact directory IDs, cleanup provenance, and `DRIVE_VERIFIED` evidence before any file reaches `DONE`.
 
 ## Name/path hardening
 

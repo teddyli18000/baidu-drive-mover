@@ -24,6 +24,7 @@ Build a safe, portable Windows CLI that moves arbitrary Baidu Netdisk share link
 - Never automatically clear Baidu recycle bin.
 - A file is complete only after Drive verification.
 - The pipeline must survive Ctrl+C, process crash, network loss, and restart.
+- Staging reconciliation must never rewind a file that already progressed downstream. It may accept a repeated staged observation only when the durable Baidu staging path is identical.
 
 ## Development discipline
 

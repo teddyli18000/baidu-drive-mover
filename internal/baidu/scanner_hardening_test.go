@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestScanStopsOnRepeatedFullPage(t *testing.T) {
@@ -44,12 +45,23 @@ func TestScanStopsOnRepeatedFullPage(t *testing.T) {
 func TestScanHandlesTenThousandFilesAcrossOneHundredPages(t *testing.T) {
 	const total = 10000
 	requests := 0
+	failedOnce := make(map[int]bool)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		requests++
 		if err := r.ParseForm(); err != nil {
 			t.Fatal(err)
 		}
 		pageNumber, _ := strconv.Atoi(r.URL.Query().Get("page"))
+		if !failedOnce[pageNumber] && (pageNumber%13 == 0 || pageNumber%17 == 0) {
+			failedOnce[pageNumber] = true
+			if pageNumber%17 == 0 {
+				w.Header().Set("Retry-After", "1")
+				w.WriteHeader(http.StatusTooManyRequests)
+			} else {
+				w.WriteHeader(http.StatusServiceUnavailable)
+			}
+			return
+		}
 		start := (pageNumber - 1) * shareListPageSize
 		if start >= total {
 			_ = json.NewEncoder(w).Encode(shareListResponse{Errno: 0, List: []shareListItem{}})
@@ -71,7 +83,10 @@ func TestScanHandlesTenThousandFilesAcrossOneHundredPages(t *testing.T) {
 		_ = json.NewEncoder(w).Encode(shareListResponse{Errno: 0, List: items})
 	}))
 	defer server.Close()
-	client, err := NewClient("BDUSS=fake; STOKEN=fake", WithBaseURL(server.URL))
+	client, err := NewClient("BDUSS=fake; STOKEN=fake",
+		WithBaseURL(server.URL),
+		WithSleep(func(context.Context, time.Duration) error { return nil }),
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -83,8 +98,8 @@ func TestScanHandlesTenThousandFilesAcrossOneHundredPages(t *testing.T) {
 	if len(sink.files) != total {
 		t.Fatalf("files=%d want=%d", len(sink.files), total)
 	}
-	if requests != 101 {
-		t.Fatalf("requests=%d want=101", requests)
+	if requests != 113 {
+		t.Fatalf("requests=%d want=113", requests)
 	}
 	if got := sink.files[strconv.Itoa(100000+9999)].LogicalPath; got != "/file-09999.bin" {
 		t.Fatalf("last logical path=%q", got)
@@ -111,6 +126,57 @@ func TestScanPreservesLeadingAndTrailingSpacesInFilename(t *testing.T) {
 	file := sink.files["44"]
 	if file.Name != name || file.LogicalPath != "/"+name {
 		t.Fatalf("name/path were normalized unexpectedly: name=%q path=%q", file.Name, file.LogicalPath)
+	}
+}
+
+func TestScanPreservesRemoteOnlyFilenameFormsAsLogicalMetadata(t *testing.T) {
+	names := []string{"CON", "report:final?.txt", "资料-😀.bin", "trailing.", strings.Repeat("长", 120)}
+	items := make([]shareListItem, 0, len(names))
+	for i, name := range names {
+		items = append(items, shareListItem{
+			FsID:           int64(100 + i),
+			ServerFilename: name,
+			Path:           "/" + name,
+			Size:           int64(i),
+		})
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(shareListResponse{Errno: 0, List: items})
+	}))
+	defer server.Close()
+	client, _ := NewClient("BDUSS=fake; STOKEN=fake", WithBaseURL(server.URL))
+	link, _ := ParseShareLink("https://pan.baidu.com/s/1Synthetic")
+	sink := newMemorySink()
+	if err := client.Scan(context.Background(), "task", link, ShareContext{BDSToken: "t"}, sink); err != nil {
+		t.Fatal(err)
+	}
+	for i, name := range names {
+		file := sink.files[strconv.Itoa(100+i)]
+		if file.Name != name || file.LogicalPath != "/"+name {
+			t.Fatalf("name %q was normalized unexpectedly: %+v", name, file)
+		}
+	}
+}
+
+func TestScanRejectsNonPositiveFileIDs(t *testing.T) {
+	for _, fsID := range []int64{0, -1} {
+		t.Run(strconv.FormatInt(fsID, 10), func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				_ = json.NewEncoder(w).Encode(shareListResponse{Errno: 0, List: []shareListItem{{
+					FsID:           fsID,
+					ServerFilename: "invalid-id.bin",
+					Path:           "/invalid-id.bin",
+					Size:           1,
+				}}})
+			}))
+			defer server.Close()
+			client, _ := NewClient("BDUSS=fake; STOKEN=fake", WithBaseURL(server.URL))
+			link, _ := ParseShareLink("https://pan.baidu.com/s/1Synthetic")
+			err := client.Scan(context.Background(), "task", link, ShareContext{BDSToken: "t"}, newMemorySink())
+			if err == nil || !strings.Contains(err.Error(), "valid fs_id") {
+				t.Fatalf("expected invalid fs_id rejection, got %v", err)
+			}
+		})
 	}
 }
 

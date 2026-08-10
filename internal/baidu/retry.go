@@ -88,10 +88,10 @@ func parseRetryAfter(value string, now time.Time) time.Duration {
 		if seconds <= 0 {
 			return 0
 		}
-		delay := time.Duration(seconds) * time.Second
-		if delay > maxRetryDelay {
+		if seconds > int64(maxRetryDelay/time.Second) {
 			return 0
 		}
+		delay := time.Duration(seconds) * time.Second
 		return delay
 	}
 	when, err := time.Parse(time.RFC1123, value)

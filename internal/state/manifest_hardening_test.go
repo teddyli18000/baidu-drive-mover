@@ -30,6 +30,28 @@ func TestManifestSourceIDCannotRebindLogicalPath(t *testing.T) {
 	}
 }
 
+func TestManifestLogicalPathCannotRebindToDifferentSourceIDAcrossPages(t *testing.T) {
+	store := newStagingTestStore(t)
+	ctx := context.Background()
+	createStagingTestTask(t, store, "task-path-rebind")
+	first := manifest.File{SourceID: "101", LogicalPath: "/same.bin", ParentPath: "/", Name: "same.bin", Size: 7}
+	if err := store.UpsertManifestPage(ctx, "task-path-rebind", nil, []manifest.File{first}); err != nil {
+		t.Fatal(err)
+	}
+	second := first
+	second.SourceID = "202"
+	if err := store.UpsertManifestPage(ctx, "task-path-rebind", nil, []manifest.File{second}); err == nil {
+		t.Fatal("expected cross-page logical path rebinding rejection")
+	}
+	stats, err := store.ManifestStats(ctx, "task-path-rebind")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stats.Files != 1 {
+		t.Fatalf("rejected path rebinding changed manifest count: %+v", stats)
+	}
+}
+
 func TestManifestRejectsFileDirectoryCollisionBothDirections(t *testing.T) {
 	ctx := context.Background()
 
