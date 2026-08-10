@@ -1,4 +1,4 @@
-# v0.6 Full Pipeline Design
+# v0.6 Full Pipeline Design (implemented)
 
 v0.6 closes the production pipeline after v0.5 established independently verified Google Drive uploads. The milestone adds bounded pipeline scheduling, restart reconciliation, graceful cancellation, and automatic cleanup of **only** tool-owned local/Baidu staging data.
 

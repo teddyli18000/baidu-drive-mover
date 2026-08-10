@@ -1,0 +1,172 @@
+name: Windows Release
+
+on:
+  push:
+    tags:
+      - 'v0.*.*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: SemVer to build without publishing
+        required: true
+        default: 0.8.0-dev
+
+permissions:
+  contents: read
+
+jobs:
+  source-gates:
+    name: Linux formatting, prolonged and race gates
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+        with:
+          go-version: '1.26.5'
+          cache: true
+      - run: go mod download
+      - name: Verify module files and formatting
+        run: |
+          go mod tidy
+          git diff --exit-code -- go.mod go.sum
+          bad=$(gofmt -l ./cmd ./internal)
+          test -z "$bad" || { echo "$bad"; exit 1; }
+      - run: go vet ./...
+      - name: Run prolonged restart gate
+        run: go test ./internal/app -run '^TestProlongedMigrationPersistsAcrossSQLiteRestarts$' -count=1 -timeout=15m
+      - name: Run race suite
+        run: go test -race ./... -count=1
+
+  codeql:
+    name: CodeQL
+    runs-on: windows-latest
+    timeout-minutes: 30
+    permissions:
+      security-events: write
+      packages: read
+      actions: read
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: github/codeql-action/init@c4dd10e44af883a891fe31ced449bcb4a6728b9b # v3
+        with:
+          languages: go
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+        with:
+          go-version: '1.26.5'
+          cache: true
+      - run: go mod download
+      - run: go build ./cmd/baidu-drive-mover
+      - uses: github/codeql-action/analyze@c4dd10e44af883a891fe31ced449bcb4a6728b9b # v3
+
+  package:
+    runs-on: windows-latest
+    timeout-minutes: 20
+    outputs:
+      version: ${{ steps.identity.outputs.version }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+        with:
+          go-version: '1.26.5'
+          cache: true
+      - name: Resolve release identity
+        id: identity
+        shell: pwsh
+        env:
+          REQUESTED_VERSION: ${{ inputs.version }}
+        run: |
+          if ($env:GITHUB_REF_TYPE -eq 'tag') {
+            if ($env:GITHUB_REF_NAME -notmatch '^v(0\.[0-9]+\.[0-9]+)$') {
+              throw "Release tag must be v0.x.y: $env:GITHUB_REF_NAME"
+            }
+            $version = $Matches[1]
+          } else {
+            $version = $env:REQUESTED_VERSION
+          }
+          if ($version -notmatch '^0\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(?:-(?:(?:0|[1-9][0-9]*)|(?:[0-9A-Za-z-]*[A-Za-z-][0-9A-Za-z-]*))(?:\.(?:(?:0|[1-9][0-9]*)|(?:[0-9A-Za-z-]*[A-Za-z-][0-9A-Za-z-]*)))*)?$') {
+            throw "Invalid release version: $version"
+          }
+          $date = (git show -s --format=%cI $env:GITHUB_SHA).Trim()
+          "version=$version" >> $env:GITHUB_OUTPUT
+          "build_date=$date" >> $env:GITHUB_OUTPUT
+      - name: Download locked modules
+        run: go mod download
+      - name: Verify source gates
+        shell: pwsh
+        run: |
+          go mod tidy
+          git diff --exit-code -- go.mod go.sum
+          go vet ./...
+          go test ./... -skip '^TestProlongedMigrationPersistsAcrossSQLiteRestarts$' -count=1
+      - name: Build and smoke-test package
+        shell: pwsh
+        env:
+          RELEASE_VERSION: ${{ steps.identity.outputs.version }}
+          RELEASE_BUILD_DATE: ${{ steps.identity.outputs.build_date }}
+        run: |
+          ./scripts/build-release.ps1 `
+            -Version $env:RELEASE_VERSION `
+            -Commit $env:GITHUB_SHA `
+            -BuildDate $env:RELEASE_BUILD_DATE `
+            -OutputRoot 'dist'
+          ./scripts/build-release.ps1 `
+            -Version $env:RELEASE_VERSION `
+            -Commit $env:GITHUB_SHA `
+            -BuildDate $env:RELEASE_BUILD_DATE `
+            -OutputRoot 'build/reproducibility-check'
+          $primaryHash = (Get-FileHash "dist/BaiduDriveMover-$env:RELEASE_VERSION-windows-amd64.zip" -Algorithm SHA256).Hash
+          $secondHash = (Get-FileHash "build/reproducibility-check/BaiduDriveMover-$env:RELEASE_VERSION-windows-amd64.zip" -Algorithm SHA256).Hash
+          if ($primaryHash -ne $secondHash) {
+            throw "Repeated release builds differ: $primaryHash != $secondHash"
+          }
+          ./scripts/verify-release.ps1 `
+            -ZipPath "dist/BaiduDriveMover-$env:RELEASE_VERSION-windows-amd64.zip" `
+            -ChecksumsPath 'dist/SHA256SUMS.txt' `
+            -ExpectedVersion $env:RELEASE_VERSION `
+            -ExpectedCommit $env:GITHUB_SHA `
+            -WorkRoot (Join-Path $env:RUNNER_TEMP 'bdm-release-smoke')
+      - name: Upload verified artifacts
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: BaiduDriveMover-${{ steps.identity.outputs.version }}-windows-amd64
+          path: |
+            dist/BaiduDriveMover-${{ steps.identity.outputs.version }}-windows-amd64.zip
+            dist/SHA256SUMS.txt
+          if-no-files-found: error
+  publish:
+    name: Publish verified tag
+    if: github.event_name == 'push' && github.ref_type == 'tag'
+    needs: [source-gates, codeql, package]
+    runs-on: windows-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 0
+      - uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
+        with:
+          name: BaiduDriveMover-${{ needs.package.outputs.version }}-windows-amd64
+          path: dist
+      - name: Publish GitHub release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_VERSION: ${{ needs.package.outputs.version }}
+        run: |
+          $tagCommit = (git rev-list -n 1 $env:GITHUB_REF_NAME).Trim()
+          if ($LASTEXITCODE -ne 0 -or $tagCommit -ne $env:GITHUB_SHA) {
+            throw "Release tag does not point at the workflow commit: tag=$tagCommit workflow=$env:GITHUB_SHA"
+          }
+          gh release create $env:GITHUB_REF_NAME `
+            "dist/BaiduDriveMover-$env:RELEASE_VERSION-windows-amd64.zip" `
+            'dist/SHA256SUMS.txt' `
+            --repo $env:GITHUB_REPOSITORY `
+            --verify-tag `
+            --generate-notes `
+            --title "BaiduDriveMover $env:GITHUB_REF_NAME"

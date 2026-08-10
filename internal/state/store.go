@@ -10,7 +10,7 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-const schemaVersion = 4
+const schemaVersion = 5
 
 type Store struct {
 	db *sql.DB
@@ -108,6 +108,15 @@ CREATE TABLE IF NOT EXISTS schema_migrations (
 			return err
 		}
 		if err := recordMigration(ctx, tx, 4); err != nil {
+			return err
+		}
+		current = 4
+	}
+	if current < 5 {
+		if err := migrationV5(ctx, tx); err != nil {
+			return err
+		}
+		if err := recordMigration(ctx, tx, 5); err != nil {
 			return err
 		}
 	}
@@ -250,6 +259,19 @@ func migrationV4(ctx context.Context, tx *sql.Tx) error {
 	return nil
 }
 
+func migrationV5(ctx context.Context, tx *sql.Tx) error {
+	statements := []string{
+		`ALTER TABLE tasks ADD COLUMN scan_completed INTEGER NOT NULL DEFAULT 0 CHECK(scan_completed IN (0,1));`,
+		`CREATE INDEX idx_tasks_resume ON tasks(status, updated_at DESC);`,
+	}
+	for _, stmt := range statements {
+		if _, err := tx.ExecContext(ctx, stmt); err != nil {
+			return fmt.Errorf("apply schema v5: %w", err)
+		}
+	}
+	return nil
+}
+
 func (s *Store) CreateTask(ctx context.Context, task Task) error {
 	if task.ID == "" || task.ShareURL == "" {
 		return errors.New("task ID and share URL are required")
@@ -259,8 +281,8 @@ func (s *Store) CreateTask(ctx context.Context, task Task) error {
 		task.Status = TaskNew
 	}
 	_, err := s.db.ExecContext(ctx, `
-INSERT INTO tasks(id, share_url, extraction_code, status, drive_root_id, drive_root_name, last_error, created_at, updated_at)
-VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)`, task.ID, task.ShareURL, task.ExtractionCode, task.Status, task.DriveRootID, task.DriveRootName, task.LastError, now.Format(time.RFC3339Nano), now.Format(time.RFC3339Nano))
+INSERT INTO tasks(id, share_url, extraction_code, status, scan_completed, drive_root_id, drive_root_name, last_error, created_at, updated_at)
+VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, task.ID, task.ShareURL, task.ExtractionCode, task.Status, boolInt(task.ScanCompleted), task.DriveRootID, task.DriveRootName, task.LastError, now.Format(time.RFC3339Nano), now.Format(time.RFC3339Nano))
 	if err != nil {
 		return fmt.Errorf("create task: %w", err)
 	}
@@ -269,10 +291,11 @@ VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)`, task.ID, task.ShareURL, task.ExtractionCode,
 
 func (s *Store) GetTask(ctx context.Context, id string) (Task, error) {
 	var task Task
+	var scanCompleted int
 	var created, updated string
 	err := s.db.QueryRowContext(ctx, `
-SELECT id, share_url, extraction_code, status, drive_root_id, drive_root_name, last_error, created_at, updated_at
-FROM tasks WHERE id = ?`, id).Scan(&task.ID, &task.ShareURL, &task.ExtractionCode, &task.Status, &task.DriveRootID, &task.DriveRootName, &task.LastError, &created, &updated)
+SELECT id, share_url, extraction_code, status, scan_completed, drive_root_id, drive_root_name, last_error, created_at, updated_at
+FROM tasks WHERE id = ?`, id).Scan(&task.ID, &task.ShareURL, &task.ExtractionCode, &task.Status, &scanCompleted, &task.DriveRootID, &task.DriveRootName, &task.LastError, &created, &updated)
 	if err != nil {
 		return Task{}, err
 	}
@@ -284,7 +307,15 @@ FROM tasks WHERE id = ?`, id).Scan(&task.ID, &task.ShareURL, &task.ExtractionCod
 	if err != nil {
 		return Task{}, fmt.Errorf("parse task updated_at: %w", err)
 	}
+	task.ScanCompleted = scanCompleted == 1
 	return task, nil
+}
+
+func boolInt(value bool) int {
+	if value {
+		return 1
+	}
+	return 0
 }
 
 func (s *Store) SchemaVersion(ctx context.Context) (int, error) {

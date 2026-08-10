@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -244,7 +245,7 @@ func newDownloadFixture(t *testing.T, seeds []downloadSeed) downloadFixture {
 	}
 	manifestFiles := make([]manifest.File, 0, len(seeds))
 	remoteData := make(map[string][]byte)
-	for i, seed := range seeds {
+	for _, seed := range seeds {
 		md5Value := seed.expectedMD5
 		if md5Value == "" {
 			md5Value = md5Hex(seed.data)
@@ -257,9 +258,6 @@ func newDownloadFixture(t *testing.T, seeds []downloadSeed) downloadFixture {
 			Size:        int64(len(seed.data)),
 			MD5:         md5Value,
 		})
-		remotePath := fmt.Sprintf("/BaiduDriveMover/%s/batch/%s", taskID, seed.name)
-		remoteData[remotePath] = seed.data
-		_ = i
 	}
 	if err := store.UpsertManifestPage(ctx, taskID, []manifest.Directory{{LogicalPath: "/folder"}}, manifestFiles); err != nil {
 		t.Fatal(err)
@@ -274,8 +272,14 @@ func newDownloadFixture(t *testing.T, seeds []downloadSeed) downloadFixture {
 		}
 		staged := make(map[string]string)
 		for _, file := range batch.Files {
-			remotePath := fmt.Sprintf("/BaiduDriveMover/%s/batch/%s", taskID, file.Name)
+			remotePath := path.Join(batch.BaiduStagingPath, file.Name)
 			staged[file.FileID] = remotePath
+			for _, seed := range seeds {
+				if seed.id == file.FileID {
+					remoteData[remotePath] = seed.data
+					break
+				}
+			}
 		}
 		if err := store.RecordStagedFiles(ctx, taskID, batch.BatchID, staged); err != nil {
 			t.Fatal(err)

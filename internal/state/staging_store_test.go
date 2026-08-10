@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"path"
 	"path/filepath"
 	"testing"
 	"time"
@@ -211,6 +212,50 @@ func TestStagingReconcileAcceptsSamePathAfterDownstreamProgress(t *testing.T) {
 	}
 }
 
+func TestRecordStagedFilesRejectsCrossBatchAndForgedPaths(t *testing.T) {
+	store := newStagingTestStore(t)
+	ctx := context.Background()
+	taskID := "task-path-boundary"
+	createStagingTestTask(t, store, taskID)
+	if err := store.UpsertManifestPage(ctx, taskID, nil, []manifest.File{
+		{SourceID: "1", LogicalPath: "/a/file.bin", ParentPath: "/a", Name: "file.bin", Size: 10},
+		{SourceID: "2", LogicalPath: "/b/other.bin", ParentPath: "/b", Name: "other.bin", Size: 20},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	batches, err := store.PlanBatches(ctx, taskID, 200)
+	if err != nil || len(batches) != 2 {
+		t.Fatalf("plan err=%v batches=%d", err, len(batches))
+	}
+	var batchA, batchB Batch
+	for _, batch := range batches {
+		switch batch.LogicalParent {
+		case "/a":
+			batchA = batch
+		case "/b":
+			batchB = batch
+		}
+	}
+	if batchA.BatchID == "" || batchB.BatchID == "" {
+		t.Fatalf("planned batches=%+v", batches)
+	}
+	if err := store.StartBatch(ctx, taskID, batchA.BatchID); err != nil {
+		t.Fatal(err)
+	}
+	for _, forgedPath := range []string{
+		path.Join(batchB.BaiduStagingPath, "file.bin"),
+		batchA.BaiduStagingPath + "/../forged/file.bin",
+	} {
+		if err := store.RecordStagedFiles(ctx, taskID, batchA.BatchID, map[string]string{"1": forgedPath}); err == nil {
+			t.Fatalf("accepted forged staging path %q", forgedPath)
+		}
+	}
+	validPath := path.Join(batchA.BaiduStagingPath, "file.bin")
+	if err := store.RecordStagedFiles(ctx, taskID, batchA.BatchID, map[string]string{"1": validPath}); err != nil {
+		t.Fatalf("rejected exact batch staging path: %v", err)
+	}
+}
+
 func TestMigrationFromSchemaV1ToLatest(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "state.db")
 	db, err := sql.Open("sqlite", path)
@@ -246,8 +291,8 @@ func TestMigrationFromSchemaV1ToLatest(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if version != 4 {
-		t.Fatalf("schema=%d want=4", version)
+	if version != schemaVersion {
+		t.Fatalf("schema=%d want=%d", version, schemaVersion)
 	}
 	if _, err := store.db.Exec(`SELECT baidu_staging_path FROM batches LIMIT 1`); err != nil {
 		t.Fatalf("missing v2 batches column: %v", err)

@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"path"
 	"regexp"
@@ -251,17 +252,42 @@ func (s *Store) RecordStagedFiles(ctx context.Context, taskID, batchID string, s
 	}
 	defer tx.Rollback()
 	now := time.Now().UTC().Format(time.RFC3339Nano)
-	for fileID, remotePath := range staged {
-		cleanRemotePath := path.Clean(remotePath)
-		if !strings.HasPrefix(cleanRemotePath, baiduStagingRoot+"/") {
-			return fmt.Errorf("refusing untrusted Baidu staging path %q", remotePath)
+	var batchPath string
+	if err := tx.QueryRowContext(ctx, `
+SELECT baidu_staging_path
+FROM batches
+WHERE task_id = ? AND batch_id = ?`, taskID, batchID).Scan(&batchPath); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return fmt.Errorf("staging batch %q not found", batchID)
 		}
+		return fmt.Errorf("load staging batch %q path: %w", batchID, err)
+	}
+	validated := make(map[string]string, len(staged))
+	for fileID, remotePath := range staged {
+		var fileName string
+		if err := tx.QueryRowContext(ctx, `
+SELECT f.name
+FROM batch_files bf
+JOIN files f ON f.task_id = bf.task_id AND f.file_id = bf.file_id
+WHERE bf.task_id = ? AND bf.batch_id = ? AND bf.file_id = ?`, taskID, batchID, fileID).Scan(&fileName); err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				return fmt.Errorf("file %q is not part of staging batch %q", fileID, batchID)
+			}
+			return fmt.Errorf("load staged file %q: %w", fileID, err)
+		}
+		expectedPath := path.Join(batchPath, fileName)
+		if remotePath != expectedPath {
+			return fmt.Errorf("refusing Baidu staging path %q for file %q; expected %q", remotePath, fileID, expectedPath)
+		}
+		validated[fileID] = expectedPath
+	}
+	for fileID, remotePath := range validated {
 		result, err := tx.ExecContext(ctx, `
 UPDATE files SET status = ?, baidu_staging_path = ?, last_error = '', updated_at = ?
 WHERE task_id = ? AND file_id = ?
   AND file_id IN (SELECT file_id FROM batch_files WHERE task_id = ? AND batch_id = ?)
   AND status IN (?, ?, ?)`,
-			FileBaiduStaged, cleanRemotePath, now, taskID, fileID, taskID, batchID, FilePlanned, FileBaiduStaging, FileFailedRetryable)
+			FileBaiduStaged, remotePath, now, taskID, fileID, taskID, batchID, FilePlanned, FileBaiduStaging, FileFailedRetryable)
 		if err != nil {
 			return fmt.Errorf("mark file %q staged: %w", fileID, err)
 		}
@@ -274,7 +300,7 @@ WHERE task_id = ? AND file_id = ?
 			var existingRemotePath string
 			queryErr := tx.QueryRowContext(ctx, `
 SELECT status, baidu_staging_path FROM files WHERE task_id = ? AND file_id = ?`, taskID, fileID).Scan(&status, &existingRemotePath)
-			if queryErr != nil || !stagingConfirmationAlreadyConsumed(status) || existingRemotePath != cleanRemotePath {
+			if queryErr != nil || !stagingConfirmationAlreadyConsumed(status) || existingRemotePath != remotePath {
 				return fmt.Errorf("file %q is not eligible for staged confirmation", fileID)
 			}
 		}

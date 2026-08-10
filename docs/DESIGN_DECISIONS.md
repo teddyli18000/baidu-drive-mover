@@ -251,3 +251,19 @@ Consequences:
 - `Retry-After` and exponential delay remain bounded and cancellable;
 - malformed or oversized responses fail permanently instead of consuming the transient retry budget;
 - new read endpoints must opt in explicitly and add tests proving both retry bounds and mutation exclusion.
+
+## D22. A complete manifest is a durable pipeline prerequisite
+
+Decision: schema v5 records `tasks.scan_completed`. Only the scanner may set it, atomically with the post-scan paused state. The pipeline refuses all work while it is false.
+
+An interrupted scan is resumed with the same task ID and may repeat idempotent manifest pages. Migration from schema v4 defaults existing tasks to incomplete rather than inferring completeness from status or row counts.
+
+Reason: a partial manifest may look internally consistent but would silently omit source files if transferred. Completion must be explicit evidence, not inference.
+
+## D23. v0.8 packages one executable and verifies it independently
+
+Decision: the Windows x64 ZIP contains only `BaiduDriveMover.exe`. Version, exact commit, and commit-derived build date are injected at build time. A separate verifier checks the ZIP allowlist, SHA-256, embedded identity, minimal-runtime launch, and first-run `./temp/` boundary.
+
+The pinned rclone helper is not bundled; it is downloaded from the fixed official HTTPS origin and hash-verified into `temp/tools/` when Drive work first needs it. Manual workflow dispatch creates an artifact only. Public GitHub releases require a matching `v0.x.y` tag.
+
+Reason: a one-file package preserves the visible product contract while independent verification prevents build output, dependency, or version drift from masquerading as a release.

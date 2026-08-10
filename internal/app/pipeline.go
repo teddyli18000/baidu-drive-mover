@@ -15,6 +15,8 @@ var (
 	ErrPipelineNoProgress      = errors.New("pipeline made no durable progress")
 	ErrPipelinePermanentFailed = errors.New("pipeline contains permanently failed files")
 	ErrPipelinePassLimit       = errors.New("pipeline pass limit reached")
+	ErrPipelineScanIncomplete  = errors.New("pipeline cannot start before the share scan is complete")
+	ErrPipelineCacheWatermark  = errors.New("pipeline paused by local cache watermark")
 )
 
 type PipelineState interface {
@@ -72,6 +74,12 @@ func (r *PipelineRunner) Run(ctx context.Context, taskID string) (PipelineSummar
 		if err != nil {
 			return summary, err
 		}
+		if before.ScanIncomplete {
+			err := ErrPipelineScanIncomplete
+			_ = r.State.UpdateTaskStatus(context.Background(), taskID, state.TaskBlocked, safeError(err))
+			summary.Final = before
+			return summary, err
+		}
 		if before.FailedPermanent > 0 {
 			err := fmt.Errorf("%w: %d files", ErrPipelinePermanentFailed, before.FailedPermanent)
 			_ = r.State.UpdateTaskStatus(context.Background(), taskID, state.TaskFailed, safeError(err))
@@ -88,6 +96,7 @@ func (r *PipelineRunner) Run(ctx context.Context, taskID string) (PipelineSummar
 
 		summary.Passes = pass
 		current := before
+		downloadPausedByWatermark := false
 
 		if current.HasCleanupWork() {
 			cleanupSummary, err := r.Cleanup(ctx, taskID)
@@ -128,6 +137,7 @@ func (r *PipelineRunner) Run(ctx context.Context, taskID string) (PipelineSummar
 			if err != nil {
 				return r.fail(ctx, taskID, summary, err)
 			}
+			downloadPausedByWatermark = downloadSummary.PausedByWatermark
 			summary.FilesReady += downloadSummary.FilesReady
 			summary.BytesReady += downloadSummary.BytesReady
 			current, err = r.State.PipelineProgress(ctx, taskID)
@@ -137,7 +147,7 @@ func (r *PipelineRunner) Run(ctx context.Context, taskID string) (PipelineSummar
 		}
 
 		available := r.MaxCacheBytes - current.ReservedCache
-		if available > 0 && current.HasStageWork() {
+		if !downloadPausedByWatermark && available > 0 && current.HasStageWork() {
 			if _, err := r.Stage(ctx, taskID, available); err != nil {
 				return r.fail(ctx, taskID, summary, err)
 			}
@@ -161,6 +171,12 @@ func (r *PipelineRunner) Run(ctx context.Context, taskID string) (PipelineSummar
 			return summary, nil
 		}
 		if current == before {
+			if downloadPausedByWatermark || (current.HasStageWork() && current.ReservedCache >= r.MaxCacheBytes) {
+				err := ErrPipelineCacheWatermark
+				_ = r.State.UpdateTaskStatus(context.Background(), taskID, state.TaskPaused, safeError(err))
+				summary.Final = current
+				return summary, err
+			}
 			err := fmt.Errorf("%w: total=%d done=%d retryable=%d reserved=%d", ErrPipelineNoProgress, current.Total, current.Done, current.FailedRetryable, current.ReservedCache)
 			_ = r.State.UpdateTaskStatus(context.Background(), taskID, state.TaskBlocked, safeError(err))
 			summary.Final = current
@@ -189,7 +205,8 @@ func (r *PipelineRunner) Run(ctx context.Context, taskID string) (PipelineSummar
 
 func (r *PipelineRunner) fail(ctx context.Context, taskID string, summary PipelineSummary, err error) (PipelineSummary, error) {
 	status := state.TaskBlocked
-	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) || ctx.Err() != nil {
+	var deferred *StagingDeferredByWatermarkError
+	if errors.As(err, &deferred) || errors.Is(err, ErrPipelineCacheWatermark) || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) || ctx.Err() != nil {
 		status = state.TaskPaused
 	}
 	_ = r.State.UpdateTaskStatus(context.Background(), taskID, status, safeError(err))

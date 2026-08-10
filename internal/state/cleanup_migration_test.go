@@ -69,8 +69,8 @@ VALUES
 	if err != nil {
 		t.Fatal(err)
 	}
-	if version != 4 {
-		t.Fatalf("schema=%d want=4", version)
+	if version != schemaVersion {
+		t.Fatalf("schema=%d want=%d", version, schemaVersion)
 	}
 	task, err := store.GetTask(ctx, "task-v3")
 	if err != nil {
@@ -78,6 +78,16 @@ VALUES
 	}
 	if task.DriveRootID != "drive-root-v3" || task.DriveRootName != "BaiduDriveMover-task-v3" {
 		t.Fatalf("Drive root identity changed during migration: %+v", task)
+	}
+	if task.ScanCompleted {
+		t.Fatal("schema migration inferred scan completion without durable evidence")
+	}
+	resumable, err := store.ListResumableTasks(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(resumable) != 1 || resumable[0].ID != "task-v3" || resumable[0].ScanCompleted {
+		t.Fatalf("migrated unfinished task is not safely resumable: %+v", resumable)
 	}
 
 	rows, err := store.db.QueryContext(ctx, `

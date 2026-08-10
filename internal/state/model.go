@@ -51,6 +51,7 @@ type Task struct {
 	ShareURL       string
 	ExtractionCode string
 	Status         TaskStatus
+	ScanCompleted  bool
 	DriveRootID    string
 	DriveRootName  string
 	LastError      string

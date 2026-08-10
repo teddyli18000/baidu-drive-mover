@@ -160,3 +160,55 @@ func TestTransferLimitBecomesTypedError(t *testing.T) {
 		t.Fatalf("unexpected limit error: %#v", err)
 	}
 }
+
+func TestTransferFilesRejectsNonSuccessStatusWithZeroErrno(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		status int
+	}{
+		{name: "client error", status: http.StatusBadRequest},
+		{name: "redirect", status: http.StatusFound},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.WriteHeader(test.status)
+				fmt.Fprint(w, `{"errno":0,"info":[]}`)
+			}))
+			defer server.Close()
+
+			client, err := NewClient("BDUSS=fake; STOKEN=fake", WithBaseURL(server.URL), WithPCSBaseURL(server.URL))
+			if err != nil {
+				t.Fatal(err)
+			}
+			link, err := ParseShareLink("https://pan.baidu.com/s/1Synthetic")
+			if err != nil {
+				t.Fatal(err)
+			}
+			err = client.TransferFiles(context.Background(), link, ShareContext{BDSToken: "t", ShareID: "1", ShareUK: "2"}, []int64{1}, "/BaiduDriveMover/task/b")
+			if err == nil || !strings.Contains(err.Error(), fmt.Sprintf("HTTP %d", test.status)) {
+				t.Fatalf("expected HTTP %d failure, got %v", test.status, err)
+			}
+		})
+	}
+}
+
+func TestTransferFilesPreservesTypedTransientServerErrors(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusServiceUnavailable)
+		fmt.Fprint(w, `{"errno":0,"info":[]}`)
+	}))
+	defer server.Close()
+	client, err := NewClient("BDUSS=fake; STOKEN=fake", WithBaseURL(server.URL), WithPCSBaseURL(server.URL))
+	if err != nil {
+		t.Fatal(err)
+	}
+	link, err := ParseShareLink("https://pan.baidu.com/s/1Synthetic")
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = client.TransferFiles(context.Background(), link, ShareContext{BDSToken: "t", ShareID: "1", ShareUK: "2"}, []int64{1}, "/BaiduDriveMover/task/b")
+	var transientErr *TransientError
+	if !errors.As(err, &transientErr) || transientErr.Status != http.StatusServiceUnavailable {
+		t.Fatalf("expected typed transient HTTP %d error, got %#v", http.StatusServiceUnavailable, err)
+	}
+}

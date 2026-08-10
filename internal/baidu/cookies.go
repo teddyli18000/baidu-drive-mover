@@ -3,19 +3,43 @@ package baidu
 import (
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/cookiejar"
 	"net/url"
 	"os"
 	"sort"
 	"strings"
+
+	runtimepath "github.com/teddyli18000/baidu-drive-mover/internal/runtime"
 )
 
 type CookieStore struct {
-	Path string
+	Path     string
+	Layout   *runtimepath.Layout
+	Relative string
+}
+
+func NewCookieStore(layout *runtimepath.Layout) CookieStore {
+	return CookieStore{Layout: layout, Relative: "auth/baidu.cookies"}
 }
 
 func (s CookieStore) Load() (string, error) {
+	if s.Layout != nil {
+		file, err := s.Layout.OpenTempFile(s.relativePath(), os.O_RDONLY, 0)
+		if errors.Is(err, os.ErrNotExist) {
+			return "", nil
+		}
+		if err != nil {
+			return "", fmt.Errorf("open Baidu cookie store: %w", err)
+		}
+		defer file.Close()
+		data, err := io.ReadAll(io.LimitReader(file, 1<<20))
+		if err != nil {
+			return "", fmt.Errorf("read Baidu cookie store: %w", err)
+		}
+		return strings.TrimSpace(string(data)), nil
+	}
 	if s.Path == "" {
 		return "", errors.New("cookie store path is empty")
 	}
@@ -30,6 +54,13 @@ func (s CookieStore) Load() (string, error) {
 }
 
 func (s CookieStore) Save(value string) error {
+	if s.Layout != nil {
+		file, err := s.Layout.OpenTempFile(s.relativePath(), os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o600)
+		if err != nil {
+			return fmt.Errorf("open Baidu cookie store: %w", err)
+		}
+		return writeCookieFile(file, value)
+	}
 	if s.Path == "" {
 		return errors.New("cookie store path is empty")
 	}
@@ -37,6 +68,17 @@ func (s CookieStore) Save(value string) error {
 	if err != nil {
 		return fmt.Errorf("open Baidu cookie store: %w", err)
 	}
+	return writeCookieFile(file, value)
+}
+
+func (s CookieStore) relativePath() string {
+	if strings.TrimSpace(s.Relative) == "" {
+		return "auth/baidu.cookies"
+	}
+	return s.Relative
+}
+
+func writeCookieFile(file *os.File, value string) error {
 	if _, err := file.WriteString(strings.TrimSpace(value)); err != nil {
 		file.Close()
 		return fmt.Errorf("write Baidu cookie store: %w", err)

@@ -19,13 +19,14 @@ import (
 type fakeRemote struct {
 	mu         sync.Mutex
 	dirs       map[string]map[string]baidu.RemoteFile
+	listExact  map[string][]baidu.RemoteFile
 	source     map[int64]baidu.RemoteFile
 	calls      []int
 	transferFn func(*fakeRemote, []int64, string) error
 }
 
 func newFakeRemote(source map[int64]baidu.RemoteFile) *fakeRemote {
-	return &fakeRemote{dirs: make(map[string]map[string]baidu.RemoteFile), source: source}
+	return &fakeRemote{dirs: make(map[string]map[string]baidu.RemoteFile), listExact: make(map[string][]baidu.RemoteFile), source: source}
 }
 
 func (r *fakeRemote) EnsureStagingDirectory(_ context.Context, remotePath string) error {
@@ -40,6 +41,9 @@ func (r *fakeRemote) EnsureStagingDirectory(_ context.Context, remotePath string
 func (r *fakeRemote) ListStagingDirectory(_ context.Context, remotePath string) ([]baidu.RemoteFile, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	if exact, ok := r.listExact[remotePath]; ok {
+		return append([]baidu.RemoteFile(nil), exact...), nil
+	}
 	objects := r.dirs[remotePath]
 	files := make([]baidu.RemoteFile, 0, len(objects))
 	for _, object := range objects {
@@ -180,6 +184,59 @@ func TestExecutorSingleFileTransferConflictIsPermanent(t *testing.T) {
 	}
 	if stored.Status != state.BatchFailedPermanent {
 		t.Fatalf("status=%s want=%s", stored.Status, state.BatchFailedPermanent)
+	}
+}
+
+func TestExecutorRejectsDuplicateRemoteNames(t *testing.T) {
+	store, batch, source := stagingFixture(t, 2)
+	remote := newFakeRemote(source)
+	remote.listExact[batch.BaiduStagingPath] = []baidu.RemoteFile{
+		{FsID: 9000, Name: "f-000.bin", Path: path.Join(batch.BaiduStagingPath, "f-000.bin"), Size: 1, MD5: "fake-md5-000"},
+		{FsID: 9001, Name: "f-000.bin", Path: path.Join(batch.BaiduStagingPath, "f-000.bin"), Size: 1, MD5: "fake-md5-000"},
+	}
+	if err := testExecutor(store, remote).Run(context.Background(), batch.TaskID); err == nil {
+		t.Fatal("expected duplicate remote name to be rejected")
+	}
+	if len(remote.calls) != 0 {
+		t.Fatalf("duplicate listing should block before transfer, calls=%v", remote.calls)
+	}
+}
+
+func TestExecutorRejectsDuplicateOrUnknownRemoteFsIDs(t *testing.T) {
+	tests := []struct {
+		name  string
+		items []baidu.RemoteFile
+	}{
+		{
+			name: "duplicate",
+			items: []baidu.RemoteFile{
+				{FsID: 9000, Name: "f-000.bin", Size: 1, MD5: "fake-md5-000"},
+				{FsID: 9000, Name: "f-001.bin", Size: 2, MD5: "fake-md5-001"},
+			},
+		},
+		{
+			name: "unknown",
+			items: []baidu.RemoteFile{
+				{FsID: 0, Name: "f-000.bin", Size: 1, MD5: "fake-md5-000"},
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			store, batch, source := stagingFixture(t, 2)
+			remote := newFakeRemote(source)
+			items := append([]baidu.RemoteFile(nil), test.items...)
+			for i := range items {
+				items[i].Path = path.Join(batch.BaiduStagingPath, items[i].Name)
+			}
+			remote.listExact[batch.BaiduStagingPath] = items
+			if err := testExecutor(store, remote).Run(context.Background(), batch.TaskID); err == nil {
+				t.Fatal("expected invalid remote fs_id to be rejected")
+			}
+			if len(remote.calls) != 0 {
+				t.Fatalf("invalid fs_id listing should block before transfer, calls=%v", remote.calls)
+			}
+		})
 	}
 }
 

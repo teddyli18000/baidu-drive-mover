@@ -1,6 +1,6 @@
 # v0.5 Google Drive Design
 
-Status: **design frozen before implementation**.
+Status: **historical v0.5 contract; implemented**. Later cleanup and hardening behavior is defined by the v0.6 and v0.7 documents.
 
 This document defines the v0.5.0 Google Drive milestone. Implementation must not widen these permissions or safety boundaries without updating this document first.
 
@@ -47,7 +47,7 @@ SHA-256:
 ef097ef9de37a57feb7d9f9c7afb34148ad3c65be8025f1d8f7f521554a701ea
 ```
 
-This version is pinned because v1.74.4 is the current stable release verified during v0.5 design and includes security fixes present in the 2026-07-08 release.
+This version remains pinned because v1.74.4 was verified during v0.5 design on 2026-08-09 and includes security fixes present in the 2026-07-08 release. No claim is made that it remains the latest release.
 
 Authoritative upstream references:
 
@@ -427,4 +427,4 @@ Any of the following stops the Drive pass rather than applying a permissive fall
 
 There is no "best effort verified" state. Failure to prove destination correctness leaves the file incomplete.
 
-Only after this document and the corresponding design decisions are committed is v0.5 implementation allowed to begin.
+Historical note: this document was the gate used before v0.5 implementation. The implementation is now present on `main`; current end-to-end cleanup and recovery contracts are in `V06_FULL_PIPELINE.md` and `V07_HARDENING.md`.

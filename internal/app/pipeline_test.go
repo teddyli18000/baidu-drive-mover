@@ -177,3 +177,94 @@ func TestPipelineCancellationPausesWithoutRunningStages(t *testing.T) {
 		t.Fatalf("cancelled pipeline ran work or wrong status: calls=%d status=%s", calls, st.status)
 	}
 }
+
+func TestPipelineRefusesIncompleteScan(t *testing.T) {
+	st := &fakePipelineState{progress: state.PipelineProgress{ScanIncomplete: true, Total: 1, Discovered: 1}}
+	calls := 0
+	runner := &PipelineRunner{
+		State: st, MaxCacheBytes: 1024,
+		Cleanup: func(context.Context, string) (cleanupengine.Summary, error) {
+			calls++
+			return cleanupengine.Summary{}, nil
+		},
+		Drive:    func(context.Context, string) (DriveSummary, error) { calls++; return DriveSummary{}, nil },
+		Download: func(context.Context, string) (download.Summary, error) { calls++; return download.Summary{}, nil },
+		Stage:    func(context.Context, string, int64) (StageSummary, error) { calls++; return StageSummary{}, nil },
+	}
+	_, err := runner.Run(context.Background(), "partial")
+	if !errors.Is(err, ErrPipelineScanIncomplete) {
+		t.Fatalf("error=%v want incomplete scan", err)
+	}
+	if calls != 0 || st.status != state.TaskBlocked {
+		t.Fatalf("calls=%d status=%s", calls, st.status)
+	}
+}
+
+func TestPipelinePausesWhenDownloadHitsCacheWatermark(t *testing.T) {
+	st := &fakePipelineState{progress: state.PipelineProgress{Total: 1, BaiduStaged: 1, ReservedCache: 90, DriveRootReady: true}}
+	stageCalls := 0
+	runner := &PipelineRunner{
+		State:         st,
+		MaxCacheBytes: 100,
+		Cleanup:       func(context.Context, string) (cleanupengine.Summary, error) { return cleanupengine.Summary{}, nil },
+		Drive:         func(context.Context, string) (DriveSummary, error) { return DriveSummary{}, nil },
+		Download: func(context.Context, string) (download.Summary, error) {
+			return download.Summary{PausedByWatermark: true}, nil
+		},
+		Stage: func(context.Context, string, int64) (StageSummary, error) {
+			stageCalls++
+			return StageSummary{}, nil
+		},
+	}
+	_, err := runner.Run(context.Background(), "watermark")
+	if !errors.Is(err, ErrPipelineCacheWatermark) {
+		t.Fatalf("expected ErrPipelineCacheWatermark, got %v", err)
+	}
+	if stageCalls != 0 || st.status != state.TaskPaused {
+		t.Fatalf("watermark pause staged more work or wrong status: calls=%d status=%s", stageCalls, st.status)
+	}
+}
+
+func TestPipelinePropagatesCurrentCacheCapacityToStage(t *testing.T) {
+	st := &fakePipelineState{progress: state.PipelineProgress{Total: 1, Planned: 1, ReservedCache: 80}}
+	var got int64
+	runner := &PipelineRunner{
+		State:         st,
+		MaxCacheBytes: 100,
+		Cleanup:       func(context.Context, string) (cleanupengine.Summary, error) { return cleanupengine.Summary{}, nil },
+		Drive:         func(context.Context, string) (DriveSummary, error) { return DriveSummary{}, nil },
+		Download:      func(context.Context, string) (download.Summary, error) { return download.Summary{}, nil },
+		Stage: func(_ context.Context, _ string, maxBytes int64) (StageSummary, error) {
+			got = maxBytes
+			return StageSummary{}, nil
+		},
+	}
+	_, err := runner.Run(context.Background(), "capacity")
+	if !errors.Is(err, ErrPipelineNoProgress) {
+		t.Fatalf("expected no-progress after observing stage capacity, got %v", err)
+	}
+	if got != 20 {
+		t.Fatalf("stage capacity=%d want=20", got)
+	}
+}
+
+func TestPipelineTreatsDeferredStagingAsPause(t *testing.T) {
+	st := &fakePipelineState{progress: state.PipelineProgress{Total: 1, Planned: 1, ReservedCache: 90}}
+	deferred := &StagingDeferredByWatermarkError{BatchID: "batch", Bytes: 20, Available: 10, Limit: 100}
+	runner := &PipelineRunner{
+		State:         st,
+		MaxCacheBytes: 100,
+		Cleanup:       func(context.Context, string) (cleanupengine.Summary, error) { return cleanupengine.Summary{}, nil },
+		Drive:         func(context.Context, string) (DriveSummary, error) { return DriveSummary{}, nil },
+		Download:      func(context.Context, string) (download.Summary, error) { return download.Summary{}, nil },
+		Stage:         func(context.Context, string, int64) (StageSummary, error) { return StageSummary{}, deferred },
+	}
+	_, err := runner.Run(context.Background(), "deferred")
+	var got *StagingDeferredByWatermarkError
+	if !errors.As(err, &got) || got != deferred {
+		t.Fatalf("expected deferred staging error, got %v", err)
+	}
+	if st.status != state.TaskPaused {
+		t.Fatalf("deferred staging status=%s want=PAUSED", st.status)
+	}
+}

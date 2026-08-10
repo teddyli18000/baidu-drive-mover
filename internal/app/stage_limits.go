@@ -9,5 +9,5 @@ type StagingBatchTooLargeError struct {
 }
 
 func (e *StagingBatchTooLargeError) Error() string {
-	return fmt.Sprintf("staging batch %s requires %d bytes but current byte limit is %d", e.BatchID, e.Bytes, e.Limit)
+	return fmt.Sprintf("staging batch %s requires %d bytes but the global cache limit is %d", e.BatchID, e.Bytes, e.Limit)
 }

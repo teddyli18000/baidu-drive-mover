@@ -200,7 +200,20 @@ func (e *Executor) reconcile(ctx context.Context, batch state.Batch) ([]state.Fi
 	}
 	staged := make(map[string]string)
 	present := make(map[string]bool)
+	seenNames := make(map[string]struct{}, len(remoteFiles))
+	seenFsIDs := make(map[int64]struct{}, len(remoteFiles))
 	for _, remote := range remoteFiles {
+		if remote.FsID <= 0 {
+			return nil, permanent(&baidu.StagingConflictError{Name: remote.Name})
+		}
+		if _, exists := seenFsIDs[remote.FsID]; exists {
+			return nil, permanent(&baidu.StagingConflictError{Name: remote.Name})
+		}
+		seenFsIDs[remote.FsID] = struct{}{}
+		if _, exists := seenNames[remote.Name]; exists {
+			return nil, permanent(&baidu.StagingConflictError{Name: remote.Name})
+		}
+		seenNames[remote.Name] = struct{}{}
 		file, ok := expected[remote.Name]
 		if !ok || remote.IsDir {
 			return nil, permanent(&baidu.StagingConflictError{Name: remote.Name})

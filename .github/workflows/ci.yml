@@ -15,8 +15,8 @@ jobs:
     runs-on: windows-latest
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-go@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
         with:
           go-version: '1.26.5'
           cache: true
@@ -31,20 +31,25 @@ jobs:
         run: go vet ./...
       - name: Test
         run: go test ./... -skip '^TestProlongedMigrationPersistsAcrossSQLiteRestarts$' -count=1
-      - name: Build Windows executable
+      - name: Build and verify Windows release package
         shell: pwsh
         run: |
-          New-Item -ItemType Directory -Force bin | Out-Null
-          $date = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')
-          go build -trimpath -ldflags "-s -w -X github.com/teddyli18000/baidu-drive-mover/internal/version.Commit=$env:GITHUB_SHA -X github.com/teddyli18000/baidu-drive-mover/internal/version.BuildDate=$date" -o bin/BaiduDriveMover.exe ./cmd/baidu-drive-mover
+          $date = (git show -s --format=%cI $env:GITHUB_SHA).Trim()
+          ./scripts/build-release.ps1 -Version '0.8.0-dev' -Commit $env:GITHUB_SHA -BuildDate $date -OutputRoot 'build/ci-release'
+          ./scripts/verify-release.ps1 `
+            -ZipPath 'build/ci-release/BaiduDriveMover-0.8.0-dev-windows-amd64.zip' `
+            -ChecksumsPath 'build/ci-release/SHA256SUMS.txt' `
+            -ExpectedVersion '0.8.0-dev' `
+            -ExpectedCommit $env:GITHUB_SHA `
+            -WorkRoot (Join-Path $env:RUNNER_TEMP 'bdm-package-smoke')
 
   linux-race:
     name: Linux formatting, race and logic tests
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-go@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
         with:
           go-version: '1.26.5'
           cache: true
