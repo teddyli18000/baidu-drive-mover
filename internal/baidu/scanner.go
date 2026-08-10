@@ -26,7 +26,7 @@ type shareListItem struct {
 	FsID           int64  `json:"fs_id"`
 	ServerFilename string `json:"server_filename"`
 	Path           string `json:"path"`
-	IsDir          int    `json:"isdir"`
+	IsDir          int64  `json:"isdir"`
 	Size           int64  `json:"size"`
 	MD5            string `json:"md5"`
 }
@@ -65,7 +65,7 @@ func (item *shareListItem) UnmarshalJSON(data []byte) error {
 		FsID:           fsID,
 		ServerFilename: wire.ServerFilename,
 		Path:           wire.Path,
-		IsDir:          int(isDir),
+		IsDir:          isDir,
 		Size:           size,
 		MD5:            wire.MD5,
 	}
@@ -322,7 +322,8 @@ func sharePageFingerprint(items []shareListItem) [32]byte {
 		_, _ = hash.Write(buffer[:])
 		binary.LittleEndian.PutUint64(buffer[:], uint64(item.Size))
 		_, _ = hash.Write(buffer[:])
-		_, _ = hash.Write([]byte{byte(item.IsDir)})
+		binary.LittleEndian.PutUint64(buffer[:], uint64(item.IsDir))
+		_, _ = hash.Write(buffer[:])
 		for _, value := range []string{item.ServerFilename, item.Path, strings.TrimSpace(item.MD5)} {
 			binary.LittleEndian.PutUint64(buffer[:], uint64(len(value)))
 			_, _ = hash.Write(buffer[:])
