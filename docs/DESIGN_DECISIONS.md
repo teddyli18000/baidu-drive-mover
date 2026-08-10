@@ -275,3 +275,11 @@ Decision: `-scan-only` completes or resumes the Baidu manifest scan, prints the 
 An already completed scan is not silently refreshed: the command reports its persisted manifest statistics. A fresh isolated runtime folder is therefore required when the acceptance goal is a new observation of a real share.
 
 Reason: the live-test strategy requires inspection of a real manifest before any staging, Drive, or cleanup mutation. Keeping the checkpoint in the normal executable also makes the tested artifact and the eventual migration artifact identical.
+
+## D25. Share-relative paths are independent of Baidu enumeration paths
+
+Decision: the scanner carries separate remote and logical paths for every queued directory. The initial share listing is mapped to logical `/` even when Baidu exposes each entry using its source-account absolute path. All initial entries must resolve beneath one consistent remote parent; after that anchor is established, every nested entry must exactly match its queued remote parent plus its validated filename.
+
+The remote path is used only to enumerate descendants. Manifest and Drive paths are built only from validated filenames beneath the logical parent, so source-account prefixes never leak into the migrated tree.
+
+Reason: Baidu's root share response can expose a provider-internal absolute path that is not the share URL's logical root. Treating the two namespaces as identical either rejects valid shares or risks reproducing unrelated source prefixes. Separating them preserves the intended tree while retaining strict nested containment checks.

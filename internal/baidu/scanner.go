@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/url"
 	"path"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -21,6 +22,12 @@ const (
 	shareListPageSize         = 100
 	maxSharePagesPerDirectory = 100000
 )
+
+type scanDirectory struct {
+	remotePath  string
+	logicalPath string
+	initial     bool
+}
 
 type shareListItem struct {
 	FsID           int64  `json:"fs_id"`
@@ -144,8 +151,9 @@ func (c *Client) Scan(ctx context.Context, taskID string, link ShareLink, share 
 		return fmt.Errorf("manifest sink is nil")
 	}
 	start := normalizeRemotePath(link.StartPath)
-	queue := []string{start}
-	queued := map[string]bool{start: true}
+	queue := []scanDirectory{{remotePath: start, logicalPath: "/", initial: true}}
+	queuedRemote := map[string]string{start: "/"}
+	queuedLogical := map[string]string{"/": start}
 	visited := make(map[string]bool)
 
 	for len(queue) > 0 {
@@ -154,23 +162,25 @@ func (c *Client) Scan(ctx context.Context, taskID string, link ShareLink, share 
 		}
 		current := queue[0]
 		queue = queue[1:]
-		if visited[current] {
+		if visited[current.remotePath] {
 			continue
 		}
-		visited[current] = true
+		visited[current.remotePath] = true
 		seenPages := make(map[[32]byte]int)
+		initialRemoteParent := ""
+		initialRemoteParentSet := false
 
 		for pageNumber := 1; ; pageNumber++ {
 			if pageNumber > maxSharePagesPerDirectory {
-				return fmt.Errorf("share directory %q exceeded pagination safety ceiling", current)
+				return fmt.Errorf("share directory %q exceeded pagination safety ceiling", current.remotePath)
 			}
-			items, err := c.listSharePage(ctx, link, share, current, pageNumber)
+			items, err := c.listSharePage(ctx, link, share, current.remotePath, pageNumber)
 			if err != nil {
 				return err
 			}
 			fingerprint := sharePageFingerprint(items)
 			if previous, exists := seenPages[fingerprint]; exists {
-				return fmt.Errorf("share directory %q pagination made no progress: page %d repeats page %d", current, pageNumber, previous)
+				return fmt.Errorf("share directory %q pagination made no progress: page %d repeats page %d", current.remotePath, pageNumber, previous)
 			}
 			seenPages[fingerprint] = pageNumber
 
@@ -182,17 +192,28 @@ func (c *Client) Scan(ctx context.Context, taskID string, link ShareLink, share 
 				if err != nil {
 					return err
 				}
-				expectedFullPath := normalizeRemotePath(path.Join(current, name))
+				logicalPath := normalizeRemotePath(path.Join(current.logicalPath, name))
+				expectedFullPath := normalizeRemotePath(path.Join(current.remotePath, name))
 				fullPath := expectedFullPath
 				if strings.TrimSpace(item.Path) != "" {
-					fullPath = normalizeRemotePath(item.Path)
-					if fullPath != expectedFullPath {
-						return fmt.Errorf("Baidu returned child path %q for %q outside expected parent %q", fullPath, name, current)
+					fullPath, err = canonicalRemoteItemPath(item.Path)
+					if err != nil {
+						return err
 					}
 				}
-				logicalPath, err := relativeLogicalPath(start, fullPath)
-				if err != nil {
-					return fmt.Errorf("Baidu returned path outside selected share root: %w", err)
+				if current.initial {
+					if path.Base(fullPath) != name {
+						return fmt.Errorf("Baidu returned root item path %q whose final component does not match %q", fullPath, name)
+					}
+					remoteParent := normalizeRemotePath(path.Dir(fullPath))
+					if !initialRemoteParentSet {
+						initialRemoteParent = remoteParent
+						initialRemoteParentSet = true
+					} else if remoteParent != initialRemoteParent {
+						return fmt.Errorf("Baidu returned root items from inconsistent remote parents %q and %q", initialRemoteParent, remoteParent)
+					}
+				} else if fullPath != expectedFullPath {
+					return fmt.Errorf("Baidu returned child path %q for %q outside expected parent %q", fullPath, name, current.remotePath)
 				}
 				kind := "file"
 				if item.IsDir == 1 {
@@ -204,16 +225,21 @@ func (c *Client) Scan(ctx context.Context, taskID string, link ShareLink, share 
 				pagePaths[logicalPath] = kind
 
 				if item.IsDir == 1 {
-					if fullPath == current {
+					if fullPath == current.remotePath {
 						return fmt.Errorf("Baidu directory %q resolved to its own parent", name)
 					}
 					if logicalPath != "/" {
 						directories = append(directories, manifest.Directory{LogicalPath: logicalPath})
 					}
-					if !queued[fullPath] {
-						queued[fullPath] = true
-						queue = append(queue, fullPath)
+					if previousLogical, exists := queuedRemote[fullPath]; exists {
+						return fmt.Errorf("Baidu returned remote directory %q more than once for logical paths %q and %q", fullPath, previousLogical, logicalPath)
 					}
+					if previousRemote, exists := queuedLogical[logicalPath]; exists {
+						return fmt.Errorf("Baidu returned logical directory %q more than once for remote paths %q and %q", logicalPath, previousRemote, fullPath)
+					}
+					queuedRemote[fullPath] = logicalPath
+					queuedLogical[logicalPath] = fullPath
+					queue = append(queue, scanDirectory{remotePath: fullPath, logicalPath: logicalPath})
 					continue
 				}
 				if item.FsID <= 0 {
@@ -314,10 +340,41 @@ func safeShareEntryName(raw string) (string, error) {
 	return name, nil
 }
 
+func canonicalRemoteItemPath(raw string) (string, error) {
+	if raw == "" || !strings.HasPrefix(raw, "/") || strings.ContainsRune(raw, '\x00') || strings.ContainsRune(raw, '\\') {
+		return "", fmt.Errorf("Baidu returned unsafe non-absolute item path %q", raw)
+	}
+	clean := path.Clean(raw)
+	if clean != raw {
+		return "", fmt.Errorf("Baidu returned non-canonical item path %q", raw)
+	}
+	return clean, nil
+}
+
 func sharePageFingerprint(items []shareListItem) [32]byte {
+	ordered := append([]shareListItem(nil), items...)
+	sort.Slice(ordered, func(i, j int) bool {
+		left, right := ordered[i], ordered[j]
+		if left.FsID != right.FsID {
+			return left.FsID < right.FsID
+		}
+		if left.Path != right.Path {
+			return left.Path < right.Path
+		}
+		if left.ServerFilename != right.ServerFilename {
+			return left.ServerFilename < right.ServerFilename
+		}
+		if left.IsDir != right.IsDir {
+			return left.IsDir < right.IsDir
+		}
+		if left.Size != right.Size {
+			return left.Size < right.Size
+		}
+		return left.MD5 < right.MD5
+	})
 	hash := sha256.New()
 	var buffer [8]byte
-	for _, item := range items {
+	for _, item := range ordered {
 		binary.LittleEndian.PutUint64(buffer[:], uint64(item.FsID))
 		_, _ = hash.Write(buffer[:])
 		binary.LittleEndian.PutUint64(buffer[:], uint64(item.Size))
@@ -333,20 +390,4 @@ func sharePageFingerprint(items []shareListItem) [32]byte {
 	var fingerprint [32]byte
 	copy(fingerprint[:], hash.Sum(nil))
 	return fingerprint
-}
-
-func relativeLogicalPath(start, full string) (string, error) {
-	start = normalizeRemotePath(start)
-	full = normalizeRemotePath(full)
-	if start == "/" {
-		return full, nil
-	}
-	if full == start {
-		return "/", nil
-	}
-	prefix := strings.TrimSuffix(start, "/") + "/"
-	if !strings.HasPrefix(full, prefix) {
-		return "", fmt.Errorf("%q is outside %q", full, start)
-	}
-	return normalizeRemotePath(strings.TrimPrefix(full, start)), nil
 }

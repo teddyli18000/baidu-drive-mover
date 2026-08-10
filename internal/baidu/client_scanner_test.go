@@ -97,25 +97,26 @@ func TestVerifyPasswordCapturesSessionCookie(t *testing.T) {
 }
 
 func TestScanPreservesMixedTreeEmptyDirsAndLargeDirectory(t *testing.T) {
+	const remoteRoot = "/source/archive"
 	tree := map[string][]shareListItem{
 		"/": {
-			{FsID: 1, ServerFilename: "root.txt", Path: "/root.txt", Size: 3},
-			{FsID: 10, ServerFilename: "bulk", Path: "/bulk", IsDir: 1},
-			{FsID: 11, ServerFilename: "empty", Path: "/empty", IsDir: 1},
-			{FsID: 12, ServerFilename: "mixed", Path: "/mixed", IsDir: 1},
+			{FsID: 1, ServerFilename: "root.txt", Path: remoteRoot + "/root.txt", Size: 3},
+			{FsID: 10, ServerFilename: "bulk", Path: remoteRoot + "/bulk", IsDir: 1},
+			{FsID: 11, ServerFilename: "empty", Path: remoteRoot + "/empty", IsDir: 1},
+			{FsID: 12, ServerFilename: "mixed", Path: remoteRoot + "/mixed", IsDir: 1},
 		},
-		"/empty": {},
-		"/mixed": {
-			{FsID: 20, ServerFilename: "direct.txt", Path: "/mixed/direct.txt", Size: 5},
-			{FsID: 21, ServerFilename: "nested", Path: "/mixed/nested", IsDir: 1},
+		remoteRoot + "/empty": {},
+		remoteRoot + "/mixed": {
+			{FsID: 20, ServerFilename: "direct.txt", Path: remoteRoot + "/mixed/direct.txt", Size: 5},
+			{FsID: 21, ServerFilename: "nested", Path: remoteRoot + "/mixed/nested", IsDir: 1},
 		},
-		"/mixed/nested": {{FsID: 22, ServerFilename: "deep.txt", Path: "/mixed/nested/deep.txt", Size: 7}},
+		remoteRoot + "/mixed/nested": {{FsID: 22, ServerFilename: "deep.txt", Path: remoteRoot + "/mixed/nested/deep.txt", Size: 7}},
 	}
 	bulk := make([]shareListItem, 0, 601)
 	for i := 0; i < 601; i++ {
-		bulk = append(bulk, shareListItem{FsID: int64(1000 + i), ServerFilename: fmt.Sprintf("f-%03d.bin", i), Path: fmt.Sprintf("/bulk/f-%03d.bin", i), Size: 1})
+		bulk = append(bulk, shareListItem{FsID: int64(1000 + i), ServerFilename: fmt.Sprintf("f-%03d.bin", i), Path: fmt.Sprintf("%s/bulk/f-%03d.bin", remoteRoot, i), Size: 1})
 	}
-	tree["/bulk"] = bulk
+	tree[remoteRoot+"/bulk"] = bulk
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/share/list" {
@@ -197,15 +198,28 @@ func TestScanRetriesTransientErrnoFour(t *testing.T) {
 	}
 }
 
-func TestRelativeLogicalPathForSelectedSubpath(t *testing.T) {
-	got, err := relativeLogicalPath("/folder/sub", "/folder/sub/child/file.txt")
-	if err != nil {
+func TestScanTreatsSelectedSubpathAsLogicalRoot(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := r.ParseForm(); err != nil {
+			http.Error(w, "bad form", http.StatusBadRequest)
+			return
+		}
+		if got := r.Form.Get("dir"); got != "/selected/sub" {
+			http.Error(w, "unexpected directory", http.StatusBadRequest)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(shareListResponse{Errno: 0, List: []shareListItem{{
+			FsID: 1, ServerFilename: "child.txt", Path: "/source/original/child.txt", Size: 1,
+		}}})
+	}))
+	defer server.Close()
+	client, _ := NewClient("BDUSS=fake; STOKEN=fake", WithBaseURL(server.URL))
+	link, _ := ParseShareLink("https://pan.baidu.com/s/1Synthetic#list/path=%2Fselected%2Fsub")
+	sink := newMemorySink()
+	if err := client.Scan(context.Background(), "task", link, ShareContext{BDSToken: "t"}, sink); err != nil {
 		t.Fatal(err)
 	}
-	if got != "/child/file.txt" {
-		t.Fatalf("got %q", got)
-	}
-	if _, err := relativeLogicalPath("/folder/sub", "/other/file.txt"); err == nil {
-		t.Fatal("expected outside path rejection")
+	if file, ok := sink.files["1"]; !ok || file.LogicalPath != "/child.txt" {
+		t.Fatalf("selected subpath was not mapped to logical root: %+v", sink.files)
 	}
 }
