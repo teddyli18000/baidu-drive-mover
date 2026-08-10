@@ -1,7 +1,6 @@
 package runtime
 
 import (
-	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -96,110 +95,4 @@ func TestJoinTempRejectsExistingSymlink(t *testing.T) {
 	if _, err := layout.JoinTemp("link", "file"); err == nil {
 		t.Fatal("expected symlink path rejection")
 	}
-}
-
-func TestRemoveRuntimeRootRemovesEverythingAndIsIdempotent(t *testing.T) {
-	base := t.TempDir()
-	layout, err := New(base)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := layout.Ensure(); err != nil {
-		t.Fatal(err)
-	}
-	child, err := layout.JoinTemp("cache", "task", "payload.bin")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.MkdirAll(filepath.Dir(child), 0o700); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(child, []byte("payload"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-
-	if err := layout.RemoveRuntimeRoot(); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := os.Lstat(layout.Temp); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("expected runtime temp root removed, got %v", err)
-	}
-	if _, err := os.Stat(base); err != nil {
-		t.Fatalf("expected runtime base retained, got %v", err)
-	}
-	if err := layout.RemoveRuntimeRoot(); err != nil {
-		t.Fatalf("missing runtime root should be idempotent: %v", err)
-	}
-}
-
-func TestRemoveRuntimeRootRefusesTamperedTempPath(t *testing.T) {
-	base := t.TempDir()
-	layout, err := New(base)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	tampered := filepath.Join(base, "elsewhere")
-	if err := os.MkdirAll(tampered, 0o700); err != nil {
-		t.Fatal(err)
-	}
-	layout.Temp = tampered
-	if err := layout.RemoveRuntimeRoot(); err == nil {
-		t.Fatal("expected tampered temp path to be rejected")
-	}
-	if _, err := os.Stat(tampered); err != nil {
-		t.Fatalf("tampered path should remain untouched: %v", err)
-	}
-}
-
-func TestRemoveRuntimeRootRejectsSymlinkRootAndDescendants(t *testing.T) {
-	if os.PathSeparator == '\\' {
-		t.Skip("Windows symlink creation may require developer mode")
-	}
-
-	t.Run("root", func(t *testing.T) {
-		base := t.TempDir()
-		layout, err := New(base)
-		if err != nil {
-			t.Fatal(err)
-		}
-		outside := t.TempDir()
-		if err := os.Symlink(outside, layout.Temp); err != nil {
-			t.Fatal(err)
-		}
-		if err := layout.RemoveRuntimeRoot(); err == nil {
-			t.Fatal("expected symlink temp root to be rejected")
-		}
-		if _, err := os.Stat(outside); err != nil {
-			t.Fatalf("symlink target should remain untouched: %v", err)
-		}
-	})
-
-	t.Run("descendant", func(t *testing.T) {
-		base := t.TempDir()
-		layout, err := New(base)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if err := layout.Ensure(); err != nil {
-			t.Fatal(err)
-		}
-		outside := t.TempDir()
-		link := filepath.Join(layout.Temp, "link")
-		if err := os.Symlink(outside, link); err != nil {
-			t.Fatal(err)
-		}
-		if err := layout.RemoveRuntimeRoot(); err == nil {
-			t.Fatal("expected symlink descendant to be rejected")
-		}
-		if _, err := os.Stat(layout.Temp); err != nil {
-			t.Fatalf("runtime temp root should remain after refusal: %v", err)
-		}
-		if _, err := os.Lstat(link); err != nil {
-			t.Fatalf("symlink descendant should remain after refusal: %v", err)
-		}
-		if _, err := os.Stat(outside); err != nil {
-			t.Fatalf("symlink target should remain untouched: %v", err)
-		}
-	})
 }

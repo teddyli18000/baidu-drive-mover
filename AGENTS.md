@@ -28,7 +28,6 @@ Build a safe, portable Windows CLI that moves arbitrary Baidu Netdisk share link
 - The transfer pipeline must never consume a partial share manifest; `tasks.scan_completed` is durable authority for the scan boundary.
 - Normal startup resumes the newest unfinished task. Bypassing an unfinished task to create another requires explicit `-new`; when no unfinished task exists, normal startup may prompt for a new link. Concurrent processes sharing one executable folder are rejected.
 - Live acceptance starts with `-scan-only`; a successful scan-only run must return before constructing or calling staging, download, Drive, or cleanup runners. Migration begins only through an explicit later `-resume <task-id>`.
-- After a task reaches durable `COMPLETED`, remove the entire `./temp/` only when no other non-completed task exists and after database, log, lock, browser, and rclone handles are closed. Interrupted, blocked, failed, and scan-only tasks retain recovery state.
 
 ## Development discipline
 

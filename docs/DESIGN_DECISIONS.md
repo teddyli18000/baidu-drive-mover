@@ -283,11 +283,3 @@ Decision: the scanner carries separate remote and logical paths for every queued
 The remote path is used only to enumerate descendants. Manifest and Drive paths are built only from validated filenames beneath the logical parent, so source-account prefixes never leak into the migrated tree.
 
 Reason: Baidu's root share response can expose a provider-internal absolute path that is not the share URL's logical root. Treating the two namespaces as identical either rejects valid shares or risks reproducing unrelated source prefixes. Separating them preserves the intended tree while retaining strict nested containment checks.
-
-## D26. The last completed task removes the entire local runtime
-
-Decision: after the pipeline has durably marked a task `COMPLETED`, the CLI checks the same SQLite database for any task whose status is not `COMPLETED`. If one exists, shared runtime state remains available for recovery. If none exists, a deferred finalizer runs only after signal handling, SQLite, logs, the instance lock, browser sessions, and rclone processes have closed, then deletes the exact executable-adjacent `temp/` through the centralized containment layer.
-
-This final deletion includes the dedicated Chrome profile, Baidu cookies, Google OAuth configuration, managed rclone helper, caches, logs, manifests, and task database. It never targets the executable directory, normal Chrome profile, Drive destination, unrelated Baidu data, or recycle bin. Scan-only, interruption, failure, and blocked states do not arm the finalizer. Successful `-check` and `-list` diagnostics may arm the same finalizer only when the database contains no non-completed task, so a fresh diagnostic invocation does not leave an otherwise unnecessary runtime tree.
-
-Reason: all local runtime artifacts are private and tool-owned, but some are also required to resume safely. Treating durable completion plus the absence of every other non-completed task as the deletion boundary removes local residue without sacrificing crash recovery or another task's state.

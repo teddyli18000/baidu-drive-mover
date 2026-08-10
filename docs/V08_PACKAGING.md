@@ -31,7 +31,7 @@ ZIP metadata uses the supplied commit-derived timestamp. Release CI builds the p
 - the ZIP contains exactly `BaiduDriveMover.exe`;
 - `-version` matches the requested version and exact commit;
 - `-check` runs with developer runtimes removed from `PATH`;
-- first run writes only under `./temp/` beside the executable and a successful idle `-check` removes that runtime before exit;
+- first run creates only `./temp/` beside the executable;
 - local safety check does not provision rclone or require live credentials.
 
 Normal PR CI runs this package smoke gate. `.github/workflows/release.yml` also uploads the verified ZIP and checksum as a workflow artifact. Only an exact `v0.x.y` tag may publish a GitHub release; manual dispatch builds an artifact without publishing.
