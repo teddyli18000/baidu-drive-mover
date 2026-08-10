@@ -42,6 +42,17 @@ func TestScanStopsOnRepeatedFullPage(t *testing.T) {
 	}
 }
 
+func TestSharePageFingerprintIgnoresResponseOrder(t *testing.T) {
+	first := []shareListItem{
+		{FsID: 1, ServerFilename: "a.bin", Path: "/source/a.bin", Size: 1},
+		{FsID: 2, ServerFilename: "b.bin", Path: "/source/b.bin", Size: 2},
+	}
+	second := []shareListItem{first[1], first[0]}
+	if sharePageFingerprint(first) != sharePageFingerprint(second) {
+		t.Fatal("page fingerprint changed when only response order changed")
+	}
+}
+
 func TestScanHandlesTenThousandFilesAcrossOneHundredPages(t *testing.T) {
 	const total = 10000
 	requests := 0
@@ -286,6 +297,7 @@ func TestScanRejectsUnsafeChildNamesAndPathMismatch(t *testing.T) {
 		{FsID: 3, ServerFilename: "a/b", Path: "/a/b", Size: 1},
 		{FsID: 4, ServerFilename: `a\b`, Path: `/a\b`, Size: 1},
 		{FsID: 5, ServerFilename: "safe.bin", Path: "/other.bin", Size: 1},
+		{FsID: 6, ServerFilename: "safe.bin", Path: "/source/root/dir/../safe.bin", Size: 1},
 	}
 	for _, item := range tests {
 		t.Run(fmt.Sprintf("fsid-%d", item.FsID), func(t *testing.T) {
@@ -299,6 +311,47 @@ func TestScanRejectsUnsafeChildNamesAndPathMismatch(t *testing.T) {
 				t.Fatal("expected unsafe share entry rejection")
 			}
 		})
+	}
+}
+
+func TestScanRejectsInconsistentRootParents(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(shareListResponse{Errno: 0, List: []shareListItem{
+			{FsID: 1, ServerFilename: "a.bin", Path: "/source/one/a.bin", Size: 1},
+			{FsID: 2, ServerFilename: "b.bin", Path: "/source/two/b.bin", Size: 1},
+		}})
+	}))
+	defer server.Close()
+	client, _ := NewClient("BDUSS=fake; STOKEN=fake", WithBaseURL(server.URL))
+	link, _ := ParseShareLink("https://pan.baidu.com/s/1Synthetic")
+	err := client.Scan(context.Background(), "task", link, ShareContext{BDSToken: "t"}, newMemorySink())
+	if err == nil || !strings.Contains(err.Error(), "inconsistent remote parents") {
+		t.Fatalf("expected inconsistent root parent rejection, got %v", err)
+	}
+}
+
+func TestScanRejectsNestedPathOutsideRemoteParent(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := r.ParseForm(); err != nil {
+			http.Error(w, "bad form", http.StatusBadRequest)
+			return
+		}
+		if r.Form.Get("dir") == "/" {
+			_ = json.NewEncoder(w).Encode(shareListResponse{Errno: 0, List: []shareListItem{{
+				FsID: 1, ServerFilename: "folder", Path: "/source/root/folder", IsDir: 1,
+			}}})
+			return
+		}
+		_ = json.NewEncoder(w).Encode(shareListResponse{Errno: 0, List: []shareListItem{{
+			FsID: 2, ServerFilename: "file.bin", Path: "/source/elsewhere/file.bin", Size: 1,
+		}}})
+	}))
+	defer server.Close()
+	client, _ := NewClient("BDUSS=fake; STOKEN=fake", WithBaseURL(server.URL))
+	link, _ := ParseShareLink("https://pan.baidu.com/s/1Synthetic")
+	err := client.Scan(context.Background(), "task", link, ShareContext{BDSToken: "t"}, newMemorySink())
+	if err == nil || !strings.Contains(err.Error(), "outside expected parent") {
+		t.Fatalf("expected nested parent escape rejection, got %v", err)
 	}
 }
 
