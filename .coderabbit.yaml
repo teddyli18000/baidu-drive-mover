@@ -1,15 +1,66 @@
-language: "zh-CN"
+# yaml-language-server: $schema=https://coderabbit.ai/integrations/schema.v2.json
+
+language: "en-US"
 
 reviews:
-  profile: "assertive"
+  # 保守模式：优先真实问题，减少 nitpick
+  profile: "chill"
+
+  # 不让 CodeRabbit 因自己的意见直接把 PR 标成 Request changes
   request_changes_workflow: false
+
   high_level_summary: true
   poem: false
   review_status: true
-  review_details: true
+  review_details: false
+
+  # PR 自动 review，但草稿 PR 不浪费时间
   auto_review:
     enabled: true
     drafts: false
+
+  # 不审这些没什么价值的文件
+  path_filters:
+    - "!**/node_modules/**"
+    - "!**/dist/**"
+    - "!**/build/**"
+    - "!**/.venv/**"
+    - "!**/venv/**"
+    - "!**/__pycache__/**"
+    - "!**/*.lock"
+    - "!**/package-lock.json"
+    - "!**/pnpm-lock.yaml"
+    - "!**/yarn.lock"
+    - "!**/*.min.js"
+    - "!**/*.map"
+
+  # 最重要：明确告诉 reviewer 别洁癖
+  path_instructions:
+    - path: "**/*"
+      instructions: |
+        Focus on concrete, actionable issues with meaningful impact.
+
+        Prioritize:
+        - correctness bugs
+        - security vulnerabilities
+        - regressions
+        - broken error handling
+        - concurrency or resource-management issues
+        - important edge cases that are realistically reachable
+        - performance problems with meaningful impact
+
+        Avoid comments that are primarily about:
+        - subjective style preferences
+        - naming preferences
+        - formatting
+        - unnecessary refactoring
+        - speculative abstractions
+        - "cleaner" or "more elegant" alternatives when the current code is correct
+        - trivial documentation improvements
+        - theoretical edge cases with no realistic impact
+
+        Do not suggest increasing complexity unless there is a concrete,
+        demonstrated benefit.
 
 chat:
   auto_reply: true
