@@ -9,7 +9,7 @@
 - The ZIP contains exactly `BaiduDriveMover.exe`.
 - Release identity is injected from an exact SemVer, 40-character commit SHA, and commit-derived UTC build time.
 - ZIP entry timestamps are fixed to the supplied build time; tagged release CI builds twice and requires identical ZIP SHA-256 values.
-- Smoke tests run with developer runtimes removed from `PATH` and must create only `./temp/` beside the executable.
+- Smoke tests run with developer runtimes removed from `PATH`; writes may occur only under `./temp/`, and a successful idle `-check` must remove that runtime before exit.
 - Never overwrite an existing output directory or artifact; use a fresh task-owned output root.
 - Tagged builds are the only workflow path allowed to publish a GitHub release.
 
