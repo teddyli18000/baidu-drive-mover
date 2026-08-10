@@ -145,6 +145,8 @@ Share-page parser fixtures must cover direct bootstrap objects, bootstrap JSON e
 
 Same-account staging fixtures must prove that `uk == share_uk` resolves every requested `fs_id` through the hardened scanner before a PAN internal-copy mutation, preserves provider source paths separately from logical paths, splits above the copy limit before network I/O, rejects missing/conflicting identities without mutation, and leaves ordinary other-account `/share/transfer` behavior unchanged.
 
+Provider-checksum fixtures must accept and lowercase only canonical 32-character hexadecimal MD5 values. Schema migration must clear legacy non-canonical values and recover only a staged permanent failure caused by that invalid checksum; unrelated permanent failures must remain unchanged.
+
 Required assertions include:
 
 - migration from v0.5 never grants cleanup authority;

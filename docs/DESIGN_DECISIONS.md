@@ -311,3 +311,11 @@ Decision: when the authenticated account `uk` exactly equals the share owner `sh
 The provider source path is carried only through the in-memory manifest page used for resolution; it never replaces the share-relative logical path or becomes a Drive path. Missing, duplicate, conflicting, or unsafe source identities stop before the copy request.
 
 Reason: Baidu returns parameter error `2` when an account attempts to save its own share through `/share/transfer`, even though authentication, source listing, and the isolated destination are valid. An account-internal copy is the equivalent bounded staging operation for files the logged-in account already owns, while preserving the existing download, Drive verification, and cleanup state machine.
+
+## D30. Only canonical provider MD5 values are source evidence
+
+Decision: a Baidu share-list `md5` is accepted only when its trimmed value is exactly 32 hexadecimal characters; accepted values are normalized to lowercase. Any other non-empty value is treated as unavailable rather than as a checksum. Download still enforces exact size, computes the local MD5, and Drive completion still requires equality with Drive's independently returned MD5.
+
+Schema v6 clears previously persisted non-canonical provider MD5 values. It narrowly recovers a staged file from `FAILED_PERMANENT` only when that invalid value caused a recorded cache-MD5 mismatch, retaining the cache path for fresh validation. Unrelated permanent failures remain permanent.
+
+Reason: live share enumeration returned a 32-character provider field containing non-hexadecimal characters for every file. Comparing that opaque value to a real MD5 falsely rejected correct downloads. Treating only canonical digests as optional source evidence preserves fail-closed Drive verification without granting an undocumented provider token checksum authority.

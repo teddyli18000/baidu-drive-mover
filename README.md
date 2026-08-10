@@ -53,6 +53,8 @@ During first Drive use, the verified pinned rclone helper is downloaded into `te
 
 Both other-account and same-account share links use the same user flow. Other-account shares are saved into bounded isolated staging batches. If the logged-in Baidu account owns the share, the tool instead performs a bounded account-internal copy into those batches because Baidu rejects saving an account's own share through the ordinary share-transfer endpoint. Downstream download, Drive verification, and cleanup rules are identical.
 
+Baidu share metadata is not blindly trusted as a checksum: only a canonical hexadecimal MD5 is used as optional source evidence. Every downloaded cache file is hashed locally, and completion still requires the independently reported Google Drive size and MD5 to match that local file.
+
 Successful final cleanup removes all local runtime artifacts created by the program, including its dedicated Chrome profile, stored Baidu cookies, Google OAuth configuration, managed rclone binary, caches, logs, and task database. A later migration therefore starts with fresh local authorization. If another task in the same executable folder is still non-completed, shared runtime state is retained until that task also completes.
 
 Successful `-check` and `-list` runs also remove runtime data they created when no non-completed task exists. They never discard an unfinished, blocked, or failed task merely to make a diagnostic run residue-free.

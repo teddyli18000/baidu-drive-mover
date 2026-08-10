@@ -56,6 +56,7 @@ All automatic deletion must go through a centralized provenance/containment guar
 - When the logged-in account owns the share (`uk == share_uk`), stage through bounded PAN account-internal copy after hardened `fs_id`-to-source-path resolution; `/share/transfer` is only for a different share owner.
 - Baidu share-list `fs_id`, `isdir`, and `size` values may arrive as either numbers or quoted decimal strings; decode both strictly into bounded integers and reject whitespace, signs other than `-`, fractions, exponents, non-digits, and overflow. Require `isdir` to be exactly 0 or 1 and `size` to be non-negative.
 - Baidu root listings may expose source-account absolute paths. Keep remote enumeration paths separate from share-relative logical paths: anchor the initial listing to one consistent remote parent, then require exact parent-child containment for every nested listing.
+- Treat a share-list `md5` as source evidence only when it is exactly 32 hexadecimal characters. Otherwise leave it unknown and rely on size plus locally computed MD5 and independent Drive MD5 verification.
 - Baidu share bootstrap metadata may appear inside bounded JSON string values such as `locals.share[]`, not only as a direct page object. Embedded parsing must remain depth/byte/object bounded and must never combine required fields from separate objects.
 
 ## UI rule
