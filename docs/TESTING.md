@@ -168,7 +168,7 @@ Live tests are separate from normal CI and use the user's real environment only 
 
 Progression:
 
-1. read-only real share scan;
+1. read-only real share scan with `BaiduDriveMover.exe -scan-only`; review the printed task ID and manifest statistics, then explicitly use `-resume <task-id>` to leave the read-only phase;
 2. tiny controlled Baidu staging transfer;
 3. tiny download;
 4. tiny Drive upload + verification;
@@ -179,6 +179,8 @@ Progression:
 9. large real migration.
 
 Never jump directly from mocks to destructive/large live tests.
+
+`-scan-only` must not be combined with `-check`, `-list`, `-resume`, or `-new`. Its successful exit is a hard boundary: it must not construct or call staging, download, Drive, or cleanup runners. A scan-only run may still perform the read-only share scan and the required interactive Baidu authentication/extraction-code steps.
 
 ## CI policy
 

@@ -267,3 +267,11 @@ Decision: the Windows x64 ZIP contains only `BaiduDriveMover.exe`. Version, exac
 The pinned rclone helper is not bundled; it is downloaded from the fixed official HTTPS origin and hash-verified into `temp/tools/` when Drive work first needs it. Manual workflow dispatch creates an artifact only. Public GitHub releases require a matching `v0.x.y` tag.
 
 Reason: a one-file package preserves the visible product contract while independent verification prevents build output, dependency, or version drift from masquerading as a release.
+
+## D24. Live acceptance has a durable read-only checkpoint
+
+Decision: `-scan-only` completes or resumes the Baidu manifest scan, prints the durable task ID and statistics, and returns before migration runners are constructed. It is mutually exclusive with other operating modes. A user must later run `-resume <task-id>` to authorize the first staging write.
+
+An already completed scan is not silently refreshed: the command reports its persisted manifest statistics. A fresh isolated runtime folder is therefore required when the acceptance goal is a new observation of a real share.
+
+Reason: the live-test strategy requires inspection of a real manifest before any staging, Drive, or cleanup mutation. Keeping the checkpoint in the normal executable also makes the tested artifact and the eventual migration artifact identical.

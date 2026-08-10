@@ -254,6 +254,8 @@ Implementation status: implemented for v0.8 development. The durable CLI resume 
 - safety audit
 - final UX simplification
 
+Implementation status: in progress. The read-only `-scan-only` checkpoint is the first live-acceptance prerequisite; real-service evidence must follow `docs/V09_LIVE_ACCEPTANCE.md` and cannot be replaced by synthetic CI.
+
 ## Definition of done
 
 Version 1.0 is not reached until a real large share can be moved end-to-end with original tree preserved, process interruption/restart succeeds repeatedly, temporary storage stays bounded, no unrelated files are touched, and the final release requires no developer tooling from the user.

@@ -42,9 +42,12 @@ BaiduDriveMover.exe              resume the most recently updated unfinished tas
 BaiduDriveMover.exe -new         deliberately start another task
 BaiduDriveMover.exe -list        list resumable tasks
 BaiduDriveMover.exe -resume ID   resume one listed task
+BaiduDriveMover.exe -scan-only   scan or resume the manifest, then stop before migration
 BaiduDriveMover.exe -check       validate only the local temp/SQLite safety boundary
 BaiduDriveMover.exe -version     print release identity
 ```
+
+`-scan-only` follows the normal newest-task selection rule and performs only the Baidu share scan (including authentication and extraction-code prompts when needed). If the selected task already has a durably completed manifest, it reports those persisted statistics without scanning the share again. It prints the task ID and manifest statistics, then exits before Baidu staging, downloading, Google Drive work, or cleanup. To begin migration after reviewing the scan, run `BaiduDriveMover.exe -resume <task-id>` explicitly. It cannot be combined with `-check`, `-list`, `-resume`, or `-new`.
 
 During first Drive use, the verified pinned rclone helper is downloaded into `temp/tools/` and opens an OAuth flow for the private `drive.file` scope. Each task creates a new `BaiduDriveMover-<task-id>` Drive folder. Do not move or rename that folder before the task completes. The tool never deletes destination Drive objects.
 
@@ -56,7 +59,7 @@ Release downloads include `SHA256SUMS.txt`; verify the ZIP hash before extractio
 
 ## Development status
 
-Current milestone: **v0.8 Packaged Windows Beta**.
+Current milestone: **v0.9 Real-world Beta**.
 
 v0.6 closes the cooperative end-to-end pipeline:
 
@@ -76,6 +79,8 @@ v0.7 adds bounded typed retries only to safe Baidu read/reconcile calls, includi
 
 v0.8 adds durable scan-completion evidence and a real CLI resume path, so restart reuses the original task rather than creating a duplicate. It also adds a process-level folder lock and a reproducible Windows package gate with a one-file allowlist, version/commit binding, SHA-256 output, minimal-`PATH` execution, and first-run write-boundary verification.
 
+v0.9 starts controlled live acceptance. The `-scan-only` checkpoint makes the first real-share step read-only and requires an explicit `-resume <task-id>` before any Baidu staging, local download, Drive upload, or cleanup. Live evidence progresses from a tiny controlled share through intentional restarts before medium or large migrations.
+
 Cleanup is deliberately fail-closed. A staging batch cannot be cleaned until every file in it has a persisted Drive ID and has reached `DRIVE_VERIFIED`. One SQLite transaction changes the batch to `CLEANUP_PENDING` and authorizes only the exact registered opaque local cache files and the exact `/BaiduDriveMover/<task-id>/<batch-id>` directory. Each successful deletion is recorded independently so restart can reconcile a crash between destructive steps.
 
 The task-level `/BaiduDriveMover/<task-id>` directory is removed only after every file is `DONE`, every registered batch directory is proven cleaned, and a fresh remote listing proves the task root is empty. The global `/BaiduDriveMover` directory is never deleted.
@@ -94,6 +99,7 @@ Design and release gates:
 - `docs/V06_FULL_PIPELINE.md`
 - `docs/V07_HARDENING.md`
 - `docs/V08_PACKAGING.md`
+- `docs/V09_LIVE_ACCEPTANCE.md`
 - `docs/RCLONE_PIN.md`
 
 The public repository must never contain real account cookies/tokens, browser profiles, task databases, private share manifests, logs, downloaded files, or rclone OAuth configuration.

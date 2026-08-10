@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/teddyli18000/baidu-drive-mover/internal/manifest"
 	"github.com/teddyli18000/baidu-drive-mover/internal/state"
 )
 
@@ -35,6 +36,45 @@ func TestPrintResumableTasks(t *testing.T) {
 	}})
 	text := output.String()
 	for _, want := range []string{"task-1", "PAUSED", "扫描完成", "1Sanitized"} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("output %q missing %q", text, want)
+		}
+	}
+}
+
+func TestValidateModeSelectionRejectsScanOnlyCombinations(t *testing.T) {
+	tests := []struct {
+		name string
+		args func() error
+	}{
+		{name: "check", args: func() error { return validateModeSelection(true, false, true, "", false) }},
+		{name: "list", args: func() error { return validateModeSelection(false, true, true, "", false) }},
+		{name: "resume", args: func() error { return validateModeSelection(false, false, true, "task-1", false) }},
+		{name: "new", args: func() error { return validateModeSelection(false, false, true, "", true) }},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if err := test.args(); err == nil {
+				t.Fatal("expected scan-only mode conflict")
+			}
+		})
+	}
+	if err := validateModeSelection(false, false, true, "", false); err != nil {
+		t.Fatalf("scan-only should be accepted by itself: %v", err)
+	}
+}
+
+func TestPrintScanOnlyResultExplainsSafeBoundary(t *testing.T) {
+	var output bytes.Buffer
+	printScanOnlyResult(&output, "task-scan-only", manifest.Stats{Directories: 2, Files: 3, Bytes: 4096})
+	text := output.String()
+	for _, want := range []string{
+		"task-scan-only",
+		"2 个文件夹",
+		"3 个文件",
+		"未启动百度暂存、下载、Drive 或清理",
+		"-resume task-scan-only",
+	} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("output %q missing %q", text, want)
 		}
