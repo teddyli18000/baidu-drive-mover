@@ -141,6 +141,8 @@ Automatic cleanup is not accepted merely because the happy path works. Credentia
 
 The terminal runtime finalizer is a separate gate. Tests must prove that it runs only after durable task completion and closed handles, removes the exact executable-adjacent `temp/` when every task is completed, remains idempotent, rejects a tampered/symlinked root, preserves `temp/` for scan-only/interrupted/blocked/failed work, and retains shared runtime whenever any other task is non-completed.
 
+Share-page parser fixtures must cover direct bootstrap objects, bootstrap JSON embedded in string arrays, decoy markers before valid metadata, split-object rejection, and the embedded-depth/byte/object bounds. A fixture must not make the parser combine authentication and share identifiers from different objects.
+
 Required assertions include:
 
 - migration from v0.5 never grants cleanup authority;
