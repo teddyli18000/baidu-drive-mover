@@ -115,6 +115,17 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) (exitCode int
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+	armRuntimeCleanupIfSafe := func() (bool, error) {
+		hasNonCompletedTasks, err := store.HasNonCompletedTasks(ctx)
+		if err != nil {
+			return false, err
+		}
+		if hasNonCompletedTasks {
+			return false, nil
+		}
+		removeRuntimeOnReturn = true
+		return true, nil
+	}
 
 	logger.Info("BaiduDriveMover started", "version", version.Version)
 	if *checkOnly {
@@ -124,6 +135,12 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) (exitCode int
 			return 1
 		}
 		logger.Info("local safety check passed", "schema_version", v, "runtime_root", layout.Temp)
+		if cleanupArmed, cleanupErr := armRuntimeCleanupIfSafe(); cleanupErr != nil {
+			logger.Error("cannot determine whether diagnostic runtime cleanup is safe", "error", cleanupErr)
+			return 1
+		} else if cleanupArmed {
+			fmt.Fprintln(stdout, "没有待恢复任务；退出前将清理本次检查生成的 ./temp/。")
+		}
 		return 0
 	}
 
@@ -146,6 +163,12 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) (exitCode int
 	}
 	if *listTasks {
 		printResumableTasks(stdout, resumable)
+		if cleanupArmed, cleanupErr := armRuntimeCleanupIfSafe(); cleanupErr != nil {
+			logger.Error("cannot determine whether task-list runtime cleanup is safe", "error", cleanupErr)
+			return 1
+		} else if cleanupArmed {
+			fmt.Fprintln(stdout, "没有待恢复任务；退出前将清理本次查询生成的 ./temp/。")
+		}
 		return 0
 	}
 	if selectedTask == nil {
@@ -297,15 +320,14 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) (exitCode int
 	if task, taskErr := store.GetTask(ctx, taskID); taskErr == nil && task.DriveRootName != "" {
 		fmt.Fprintf(stdout, "Drive 目标文件夹：%s（任务完成前请勿移动或重命名）。\n", task.DriveRootName)
 	}
-	hasNonCompletedTasks, err := store.HasNonCompletedTasks(ctx)
+	cleanupArmed, err := armRuntimeCleanupIfSafe()
 	if err != nil {
 		logger.Error("cannot determine whether runtime cleanup is safe", "error", err)
 		return 1
 	}
-	if hasNonCompletedTasks {
+	if !cleanupArmed {
 		fmt.Fprintln(stdout, "检测到其他未完成任务；保留 ./temp/ 中的恢复状态，待最后一个任务完成后统一清理。")
 	} else {
-		removeRuntimeOnReturn = true
 		fmt.Fprintln(stdout, "所有任务均已完成；退出前将清理本程序生成的整个 ./temp/（含专用浏览器 profile、凭据、缓存、日志、工具和任务数据库）。")
 	}
 	return 0

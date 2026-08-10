@@ -53,6 +53,8 @@ During first Drive use, the verified pinned rclone helper is downloaded into `te
 
 Successful final cleanup removes all local runtime artifacts created by the program, including its dedicated Chrome profile, stored Baidu cookies, Google OAuth configuration, managed rclone binary, caches, logs, and task database. A later migration therefore starts with fresh local authorization. If another task in the same executable folder is still non-completed, shared runtime state is retained until that task also completes.
 
+Successful `-check` and `-list` runs also remove runtime data they created when no non-completed task exists. They never discard an unfinished, blocked, or failed task merely to make a diagnostic run residue-free.
+
 Release downloads include `SHA256SUMS.txt`; verify the ZIP hash before extraction:
 
 ```powershell
