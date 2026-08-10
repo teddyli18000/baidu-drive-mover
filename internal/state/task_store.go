@@ -49,18 +49,6 @@ ORDER BY updated_at DESC, id DESC`,
 	return tasks, nil
 }
 
-// HasNonCompletedTasks reports whether any task still needs recovery,
-// inspection, or migration. Runtime-wide cleanup is allowed only when this is
-// false, because profiles, credentials, logs, tools, and the database are
-// shared by every task in the executable folder.
-func (s *Store) HasNonCompletedTasks(ctx context.Context) (bool, error) {
-	var count int
-	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM tasks WHERE status != ?`, TaskCompleted).Scan(&count); err != nil {
-		return false, fmt.Errorf("count non-completed tasks: %w", err)
-	}
-	return count > 0, nil
-}
-
 // CompleteTaskScan atomically records that the full share manifest was
 // observed. A partial manifest must never be handed to the transfer pipeline.
 func (s *Store) CompleteTaskScan(ctx context.Context, taskID string) error {

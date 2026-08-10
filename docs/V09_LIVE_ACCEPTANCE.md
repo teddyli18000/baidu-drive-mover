@@ -72,8 +72,6 @@
 3. 百度只允许删除已登记的 `/BaiduDriveMover/<task-id>/<batch-id>`；删除前必须 fresh-listing 只包含该批次预期对象。
 4. task root 仅在所有批次清理完成且 fresh listing 为空时删除；全局 `/BaiduDriveMover` 永不删除。
 5. Drive 目标、无关本地/百度对象和百度回收站永远不是自动清理目标。
-6. 最后一个非完成任务进入 durable `COMPLETED` 后，确认进程退出时整个 `temp/` 被删除；其中包括专用 Chrome profile、cookies、OAuth 配置、rclone、缓存、日志和任务数据库。若仍有其他非完成任务，必须保留共享 runtime 以便恢复。
-7. 通过 Ctrl+C、崩溃、失败、阻塞或 `-scan-only` 退出时不得删除恢复所需的 `temp/`。
 
 ## 8. 证据与保密
 
