@@ -35,6 +35,7 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	showVersion := fs.Bool("version", false, "print version")
 	checkOnly := fs.Bool("check", false, "validate local runtime/state setup and exit")
 	listTasks := fs.Bool("list", false, "list resumable tasks and exit")
+	scanOnly := fs.Bool("scan-only", false, "scan or resume the manifest, then exit before migration")
 	resumeTaskID := fs.String("resume", "", "resume a specific task ID")
 	forceNew := fs.Bool("new", false, "start a new task instead of resuming")
 	if err := fs.Parse(args); err != nil {
@@ -48,14 +49,8 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "请直接启动程序后粘贴分享链接，不要把链接放在命令行参数里。")
 		return 2
 	}
-	modeCount := 0
-	for _, selected := range []bool{*checkOnly, *listTasks, *resumeTaskID != "", *forceNew} {
-		if selected {
-			modeCount++
-		}
-	}
-	if modeCount > 1 {
-		fmt.Fprintln(stderr, "-check、-list、-resume 和 -new 不能同时使用。")
+	if err := validateModeSelection(*checkOnly, *listTasks, *scanOnly, *resumeTaskID, *forceNew); err != nil {
+		fmt.Fprintln(stderr, err)
 		return 2
 	}
 
@@ -180,8 +175,12 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		}
 		return 1
 	}
-	if selectedTask == nil || !selectedTask.ScanCompleted {
+	if !*scanOnly && (selectedTask == nil || !selectedTask.ScanCompleted) {
 		fmt.Fprintf(stdout, "扫描完成：%d 个文件夹，%d 个文件，共 %s。\n", stats.Directories, stats.Files, formatBytes(stats.Bytes))
+	}
+	if *scanOnly {
+		printScanOnlyResult(stdout, taskID, stats)
+		return 0
 	}
 
 	const maxCacheBytes = downloadengine.DefaultMaxCacheBytes
@@ -271,6 +270,24 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stdout, "Drive 目标文件夹：%s（任务完成前请勿移动或重命名）。\n", task.DriveRootName)
 	}
 	return 0
+}
+
+func validateModeSelection(checkOnly, listTasks, scanOnly bool, resumeTaskID string, forceNew bool) error {
+	modeCount := 0
+	for _, selected := range []bool{checkOnly, listTasks, scanOnly, resumeTaskID != "", forceNew} {
+		if selected {
+			modeCount++
+		}
+	}
+	if modeCount > 1 {
+		return errors.New("-check、-list、-scan-only、-resume 和 -new 不能同时使用。")
+	}
+	return nil
+}
+
+func printScanOnlyResult(output io.Writer, taskID string, stats manifest.Stats) {
+	fmt.Fprintf(output, "只读扫描完成：任务 %s；%d 个文件夹，%d 个文件，共 %s。\n", taskID, stats.Directories, stats.Files, formatBytes(stats.Bytes))
+	fmt.Fprintf(output, "未启动百度暂存、下载、Drive 或清理；后续请明确运行 BaiduDriveMover.exe -resume %s 才开始迁移。\n", taskID)
 }
 
 func selectResumableTask(tasks []state.Task, requestedID string, forceNew bool) (*state.Task, error) {

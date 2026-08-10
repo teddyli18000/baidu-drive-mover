@@ -27,6 +27,7 @@ Build a safe, portable Windows CLI that moves arbitrary Baidu Netdisk share link
 - Staging reconciliation must never rewind a file that already progressed downstream. It may accept a repeated staged observation only when the durable Baidu staging path is identical.
 - The transfer pipeline must never consume a partial share manifest; `tasks.scan_completed` is durable authority for the scan boundary.
 - Normal startup resumes the newest unfinished task. Bypassing an unfinished task to create another requires explicit `-new`; when no unfinished task exists, normal startup may prompt for a new link. Concurrent processes sharing one executable folder are rejected.
+- Live acceptance starts with `-scan-only`; a successful scan-only run must return before constructing or calling staging, download, Drive, or cleanup runners. Migration begins only through an explicit later `-resume <task-id>`.
 
 ## Development discipline
 
