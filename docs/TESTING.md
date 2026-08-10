@@ -139,6 +139,8 @@ For release candidates:
 
 Automatic cleanup is not accepted merely because the happy path works. Credential-free tests must inject failures around destructive boundaries and prove restart behavior.
 
+The terminal runtime finalizer is a separate gate. Tests must prove that it runs only after durable task completion and closed handles, removes the exact executable-adjacent `temp/` when every task is completed, remains idempotent, rejects a tampered/symlinked root, preserves `temp/` for scan-only/interrupted/blocked/failed work, and retains shared runtime whenever any other task is non-completed.
+
 Required assertions include:
 
 - migration from v0.5 never grants cleanup authority;

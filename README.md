@@ -33,7 +33,7 @@ Normal use should be:
 
 The v0.8 Windows package targets Windows x64. Extract the ZIP into a folder where your account can create files, then run `BaiduDriveMover.exe`. Normal users do not need Go, Python, Node.js, Conda, or WSL. Google Chrome is required for the isolated Baidu login window; Baidu and Google accounts plus network access are required for a real migration.
 
-The first launch creates only `temp/` beside the executable. Keep the application in the same folder while a task is active: `temp/` contains resumable state, opaque cache data, Baidu cookies, Google OAuth configuration, private share metadata, and logs. Do not upload, sync, or send this directory as a support bundle. Removing the whole application folder removes local state, but it cannot clean remote staging left by an unfinished task.
+The first launch creates only `temp/` beside the executable. Keep the application in the same folder while a task is active: `temp/` contains resumable state, opaque cache data, Baidu cookies, Google OAuth configuration, private share metadata, and logs. Do not upload, sync, or send this directory as a support bundle. After the last non-completed task reaches durable `COMPLETED`, the process closes its database, log, lock, browser, and rclone handles and removes the entire tool-owned `temp/`. Interrupted, blocked, failed, or scan-only work retains `temp/` for recovery. Removing the whole application folder while a task is unfinished cannot clean remote staging.
 
 Run modes:
 
@@ -50,6 +50,8 @@ BaiduDriveMover.exe -version     print release identity
 `-scan-only` follows the normal newest-task selection rule and performs only the Baidu share scan (including authentication and extraction-code prompts when needed). If the selected task already has a durably completed manifest, it reports those persisted statistics without scanning the share again. It prints the task ID and manifest statistics, then exits before Baidu staging, downloading, Google Drive work, or cleanup. To begin migration after reviewing the scan, run `BaiduDriveMover.exe -resume <task-id>` explicitly. It cannot be combined with `-check`, `-list`, `-resume`, or `-new`.
 
 During first Drive use, the verified pinned rclone helper is downloaded into `temp/tools/` and opens an OAuth flow for the private `drive.file` scope. Each task creates a new `BaiduDriveMover-<task-id>` Drive folder. Do not move or rename that folder before the task completes. The tool never deletes destination Drive objects.
+
+Successful final cleanup removes all local runtime artifacts created by the program, including its dedicated Chrome profile, stored Baidu cookies, Google OAuth configuration, managed rclone binary, caches, logs, and task database. A later migration therefore starts with fresh local authorization. If another task in the same executable folder is still non-completed, shared runtime state is retained until that task also completes.
 
 Release downloads include `SHA256SUMS.txt`; verify the ZIP hash before extraction:
 

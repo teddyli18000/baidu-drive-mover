@@ -29,7 +29,7 @@ func main() {
 	os.Exit(run(os.Args[1:], os.Stdin, os.Stdout, os.Stderr))
 }
 
-func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
+func run(args []string, stdin io.Reader, stdout, stderr io.Writer) (exitCode int) {
 	fs := flag.NewFlagSet("BaiduDriveMover", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	showVersion := fs.Bool("version", false, "print version")
@@ -63,19 +63,41 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "Startup failed: cannot safely initialize ./temp/: %v\n", err)
 		return 1
 	}
+	removeRuntimeOnReturn := false
+	defer func() {
+		if !removeRuntimeOnReturn {
+			return
+		}
+		if err := layout.RemoveRuntimeRoot(); err != nil {
+			fmt.Fprintf(stderr, "任务已完成，但自动清理 ./temp/ 失败：%v\n", err)
+			exitCode = 1
+		}
+	}()
 	instanceLock, err := layout.AcquireInstanceLock()
 	if err != nil {
 		fmt.Fprintf(stderr, "Startup failed: %v\n", err)
 		return 1
 	}
-	defer instanceLock.Close()
+	defer func() {
+		if err := instanceLock.Close(); err != nil {
+			removeRuntimeOnReturn = false
+			fmt.Fprintf(stderr, "关闭实例锁失败，已保留 ./temp/：%v\n", err)
+			exitCode = 1
+		}
+	}()
 
 	logFile, err := layout.OpenTempFile("logs/baidu-drive-mover.log", os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
 	if err != nil {
 		fmt.Fprintf(stderr, "Startup failed: cannot open log under ./temp/: %v\n", err)
 		return 1
 	}
-	defer logFile.Close()
+	defer func() {
+		if err := logFile.Close(); err != nil {
+			removeRuntimeOnReturn = false
+			fmt.Fprintf(stderr, "关闭日志失败，已保留 ./temp/：%v\n", err)
+			exitCode = 1
+		}
+	}()
 	logger := logsafe.NewLogger(io.MultiWriter(stdout, logFile), slog.LevelInfo)
 
 	store, err := state.Open(layout.StateDB)
@@ -83,7 +105,13 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		logger.Error("state database initialization failed", "error", err)
 		return 1
 	}
-	defer store.Close()
+	defer func() {
+		if err := store.Close(); err != nil {
+			removeRuntimeOnReturn = false
+			fmt.Fprintf(stderr, "关闭任务数据库失败，已保留 ./temp/：%v\n", err)
+			exitCode = 1
+		}
+	}()
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -268,6 +296,17 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	fmt.Fprintln(stdout, "Google Drive 目标文件不会被自动删除；百度回收站也不会被自动清空。")
 	if task, taskErr := store.GetTask(ctx, taskID); taskErr == nil && task.DriveRootName != "" {
 		fmt.Fprintf(stdout, "Drive 目标文件夹：%s（任务完成前请勿移动或重命名）。\n", task.DriveRootName)
+	}
+	hasNonCompletedTasks, err := store.HasNonCompletedTasks(ctx)
+	if err != nil {
+		logger.Error("cannot determine whether runtime cleanup is safe", "error", err)
+		return 1
+	}
+	if hasNonCompletedTasks {
+		fmt.Fprintln(stdout, "检测到其他未完成任务；保留 ./temp/ 中的恢复状态，待最后一个任务完成后统一清理。")
+	} else {
+		removeRuntimeOnReturn = true
+		fmt.Fprintln(stdout, "所有任务均已完成；退出前将清理本程序生成的整个 ./temp/（含专用浏览器 profile、凭据、缓存、日志、工具和任务数据库）。")
 	}
 	return 0
 }
