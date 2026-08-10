@@ -36,8 +36,8 @@ func (item *shareListItem) UnmarshalJSON(data []byte) error {
 		FsID           json.RawMessage `json:"fs_id"`
 		ServerFilename string          `json:"server_filename"`
 		Path           string          `json:"path"`
-		IsDir          int             `json:"isdir"`
-		Size           int64           `json:"size"`
+		IsDir          json.RawMessage `json:"isdir"`
+		Size           json.RawMessage `json:"size"`
 		MD5            string          `json:"md5"`
 	}
 	if err := json.Unmarshal(data, &wire); err != nil {
@@ -47,12 +47,26 @@ func (item *shareListItem) UnmarshalJSON(data []byte) error {
 	if err != nil {
 		return fmt.Errorf("invalid fs_id: %w", err)
 	}
+	isDir, err := parseJSONInt64(wire.IsDir)
+	if err != nil {
+		return fmt.Errorf("invalid isdir: %w", err)
+	}
+	if isDir != 0 && isDir != 1 {
+		return fmt.Errorf("invalid isdir: expected 0 or 1, got %d", isDir)
+	}
+	size, err := parseJSONInt64(wire.Size)
+	if err != nil {
+		return fmt.Errorf("invalid size: %w", err)
+	}
+	if size < 0 {
+		return fmt.Errorf("invalid size: expected a non-negative integer, got %d", size)
+	}
 	*item = shareListItem{
 		FsID:           fsID,
 		ServerFilename: wire.ServerFilename,
 		Path:           wire.Path,
-		IsDir:          wire.IsDir,
-		Size:           wire.Size,
+		IsDir:          int(isDir),
+		Size:           size,
 		MD5:            wire.MD5,
 	}
 	return nil
@@ -98,6 +112,28 @@ func parseJSONInt64(raw json.RawMessage) (int64, error) {
 type shareListResponse struct {
 	Errno int             `json:"errno"`
 	List  []shareListItem `json:"list"`
+
+	listPresent bool
+}
+
+func (response *shareListResponse) UnmarshalJSON(data []byte) error {
+	var wire struct {
+		Errno int             `json:"errno"`
+		List  json.RawMessage `json:"list"`
+	}
+	if err := json.Unmarshal(data, &wire); err != nil {
+		return err
+	}
+	response.Errno = wire.Errno
+	listJSON := bytes.TrimSpace(wire.List)
+	if len(listJSON) == 0 || bytes.Equal(listJSON, []byte("null")) {
+		return nil
+	}
+	if err := json.Unmarshal(listJSON, &response.List); err != nil {
+		return fmt.Errorf("invalid list: %w", err)
+	}
+	response.listPresent = true
+	return nil
 }
 
 func (c *Client) Scan(ctx context.Context, taskID string, link ShareLink, share ShareContext, sink manifest.Sink) error {
@@ -241,6 +277,9 @@ func (c *Client) listSharePage(ctx context.Context, link ShareLink, share ShareC
 		}
 		switch response.Errno {
 		case 0:
+			if !response.listPresent {
+				return nil, fmt.Errorf("parse Baidu share listing: successful response is missing a valid list array")
+			}
 			return response.List, nil
 		case -9:
 			return nil, ErrPasswordRequired

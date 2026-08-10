@@ -51,7 +51,7 @@ All automatic deletion must go through a centralized provenance/containment guar
 - Never log cookies/tokens/Authorization headers/signed download URLs.
 - Never send telemetry.
 - Retry transient service failures with bounded backoff; do not spin aggressively.
-- Baidu share-list `fs_id` values may arrive as either numbers or quoted decimal strings; decode both strictly into bounded integers and reject whitespace, signs other than `-`, fractions, exponents, non-digits, and overflow.
+- Baidu share-list `fs_id`, `isdir`, and `size` values may arrive as either numbers or quoted decimal strings; decode both strictly into bounded integers and reject whitespace, signs other than `-`, fractions, exponents, non-digits, and overflow. Require `isdir` to be exactly 0 or 1 and `size` to be non-negative.
 
 ## UI rule
 
