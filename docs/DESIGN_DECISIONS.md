@@ -297,3 +297,9 @@ Reason: all local runtime artifacts are private and tool-owned, but some are als
 Decision: share-page parsing checks both direct JSON objects and plausible embedded strings decoded from those objects. Embedded traversal is bounded by nesting depth, total scanned bytes, object count, object bytes, and enclosing-object depth. A valid context still requires `loginstate`, `bdstoken`, `shareid`, and `share_uk` in one decoded object; values from separate objects are never combined.
 
 Reason: a live Baidu share page returned HTTP 200 with its complete `locals.mset(...)` bootstrap inside `locals.share[]`. Treating only direct page objects as authoritative falsely classified an authenticated session as logged out and prompted for a second QR login. Bounded recursive parsing accepts the provider's alternate serialization without turning the HTML parser into an unbounded general-purpose evaluator.
+
+## D28. PAN and PCS requests use separate provider application identities
+
+Decision: authenticated PAN Web requests, including share enumeration and transfer, use application ID `250528`. Legacy PCS file operations used only for the isolated staging lifecycle (`mkdir`, `list`, and `delete`) use application ID `266719`. The IDs are distinct constants and tests assert the correct identity at each API boundary.
+
+Reason: a live authenticated session returned PCS error `31030` for every read and write made with the PAN application ID. The identical bounded PCS list request made with `266719` returned the expected `31066` not-found result for an absent tool root, proving that the session and endpoint were valid but the request used the wrong provider application identity. Keeping identities endpoint-specific prevents a working share API setting from silently breaking staging and cleanup.

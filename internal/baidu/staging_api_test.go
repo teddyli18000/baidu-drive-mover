@@ -35,6 +35,9 @@ func TestEnsureStagingDirectoryCreatesOnlyInternalAncestors(t *testing.T) {
 			http.NotFound(w, r)
 			return
 		}
+		if got := r.URL.Query().Get("app_id"); got != pcsAppID {
+			t.Errorf("PCS app_id=%q want=%q", got, pcsAppID)
+		}
 		mu.Lock()
 		created = append(created, r.URL.Query().Get("path"))
 		mu.Unlock()
@@ -86,6 +89,9 @@ func TestStagingPathEscapeRejectedBeforeNetwork(t *testing.T) {
 
 func TestListStagingDirectoryParsesBoundedObjects(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got := r.URL.Query().Get("app_id"); got != pcsAppID {
+			t.Errorf("PCS app_id=%q want=%q", got, pcsAppID)
+		}
 		_ = json.NewEncoder(w).Encode(map[string]any{
 			"list": []map[string]any{
 				{"fs_id": 7, "path": "/BaiduDriveMover/task/b/a.bin", "server_filename": "a.bin", "size": 12, "md5": "abc", "isdir": 0},
@@ -135,6 +141,9 @@ func TestTransferFilesUsesIndividualIDsAndIsolatedTarget(t *testing.T) {
 		}
 		if r.URL.Query().Get("shareid") != "123" || r.URL.Query().Get("from") != "456" || r.URL.Query().Get("bdstoken") != "token" {
 			t.Errorf("unexpected transfer query: %s", r.URL.RawQuery)
+		}
+		if got := r.URL.Query().Get("app_id"); got != panAppID {
+			t.Errorf("PAN app_id=%q want=%q", got, panAppID)
 		}
 		fmt.Fprint(w, `{"errno":0,"info":[{"errno":0,"fsid":9001,"path":"/BaiduDriveMover/task/b-1/a"}]}`)
 	}))

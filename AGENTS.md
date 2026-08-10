@@ -52,6 +52,7 @@ All automatic deletion must go through a centralized provenance/containment guar
 - Never log cookies/tokens/Authorization headers/signed download URLs.
 - Never send telemetry.
 - Retry transient service failures with bounded backoff; do not spin aggressively.
+- Keep provider application identities endpoint-specific: PAN Web/share operations use `250528`; PCS staging `mkdir`/`list`/`delete` use `266719`.
 - Baidu share-list `fs_id`, `isdir`, and `size` values may arrive as either numbers or quoted decimal strings; decode both strictly into bounded integers and reject whitespace, signs other than `-`, fractions, exponents, non-digits, and overflow. Require `isdir` to be exactly 0 or 1 and `size` to be non-negative.
 - Baidu root listings may expose source-account absolute paths. Keep remote enumeration paths separate from share-relative logical paths: anchor the initial listing to one consistent remote parent, then require exact parent-child containment for every nested listing.
 - Baidu share bootstrap metadata may appear inside bounded JSON string values such as `locals.share[]`, not only as a direct page object. Embedded parsing must remain depth/byte/object bounded and must never combine required fields from separate objects.
