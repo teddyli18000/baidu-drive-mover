@@ -180,9 +180,9 @@ func TestScanRejectsNonPositiveFileIDs(t *testing.T) {
 	}
 }
 
-func TestScanAcceptsDecimalStringFileID(t *testing.T) {
+func TestScanAcceptsQuotedDecimalNumericFields(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		fmt.Fprint(w, `{"errno":0,"list":[{"fs_id":"9223372036854775807","server_filename":"safe.bin","path":"/safe.bin","size":1,"isdir":0}]}`)
+		fmt.Fprint(w, `{"errno":0,"list":[{"fs_id":"9223372036854775807","server_filename":"safe.bin","path":"/safe.bin","size":"1","isdir":"0"}]}`)
 	}))
 	defer server.Close()
 	client, _ := NewClient("BDUSS=fake; STOKEN=fake", WithBaseURL(server.URL))
@@ -193,6 +193,56 @@ func TestScanAcceptsDecimalStringFileID(t *testing.T) {
 	}
 	if file, ok := sink.files["9223372036854775807"]; !ok || file.Name != "safe.bin" {
 		t.Fatalf("decimal string fs_id was not preserved: %+v", sink.files)
+	}
+}
+
+func TestShareListItemRejectsInvalidDirectoryAndSizeFields(t *testing.T) {
+	tests := []struct {
+		name  string
+		body  string
+		field string
+	}{
+		{name: "missing isdir", body: `{"fs_id":1,"size":1}`, field: "isdir"},
+		{name: "null isdir", body: `{"fs_id":1,"isdir":null,"size":1}`, field: "isdir"},
+		{name: "empty isdir", body: `{"fs_id":1,"isdir":"","size":1}`, field: "isdir"},
+		{name: "negative isdir", body: `{"fs_id":1,"isdir":"-1","size":1}`, field: "isdir"},
+		{name: "invalid isdir value", body: `{"fs_id":1,"isdir":"2","size":1}`, field: "isdir"},
+		{name: "fractional isdir", body: `{"fs_id":1,"isdir":"1.0","size":1}`, field: "isdir"},
+		{name: "exponent isdir", body: `{"fs_id":1,"isdir":"1e0","size":1}`, field: "isdir"},
+		{name: "overflow isdir", body: `{"fs_id":1,"isdir":"9223372036854775808","size":1}`, field: "isdir"},
+		{name: "missing size", body: `{"fs_id":1,"isdir":0}`, field: "size"},
+		{name: "null size", body: `{"fs_id":1,"isdir":0,"size":null}`, field: "size"},
+		{name: "negative numeric size", body: `{"fs_id":1,"isdir":0,"size":-1}`, field: "size"},
+		{name: "negative string size", body: `{"fs_id":1,"isdir":0,"size":"-1"}`, field: "size"},
+		{name: "fractional size", body: `{"fs_id":1,"isdir":0,"size":"1.5"}`, field: "size"},
+		{name: "exponent size", body: `{"fs_id":1,"isdir":0,"size":"1e3"}`, field: "size"},
+		{name: "overflow size", body: `{"fs_id":1,"isdir":0,"size":"9223372036854775808"}`, field: "size"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			var item shareListItem
+			err := json.Unmarshal([]byte(test.body), &item)
+			if err == nil || !strings.Contains(err.Error(), "invalid "+test.field) {
+				t.Fatalf("expected invalid %s rejection, got item=%+v err=%v", test.field, item, err)
+			}
+		})
+	}
+}
+
+func TestScanRejectsSuccessfulResponseWithoutListArray(t *testing.T) {
+	for _, body := range []string{`{"errno":0}`, `{"errno":0,"list":null}`} {
+		t.Run(body, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				fmt.Fprint(w, body)
+			}))
+			defer server.Close()
+			client, _ := NewClient("BDUSS=fake; STOKEN=fake", WithBaseURL(server.URL))
+			link, _ := ParseShareLink("https://pan.baidu.com/s/1Synthetic")
+			err := client.Scan(context.Background(), "task", link, ShareContext{BDSToken: "t"}, newMemorySink())
+			if err == nil || !strings.Contains(err.Error(), "missing a valid list array") {
+				t.Fatalf("expected missing list rejection, got %v", err)
+			}
+		})
 	}
 }
 
