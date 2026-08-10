@@ -1,6 +1,7 @@
 package baidu
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/binary"
@@ -28,6 +29,70 @@ type shareListItem struct {
 	IsDir          int    `json:"isdir"`
 	Size           int64  `json:"size"`
 	MD5            string `json:"md5"`
+}
+
+func (item *shareListItem) UnmarshalJSON(data []byte) error {
+	var wire struct {
+		FsID           json.RawMessage `json:"fs_id"`
+		ServerFilename string          `json:"server_filename"`
+		Path           string          `json:"path"`
+		IsDir          int             `json:"isdir"`
+		Size           int64           `json:"size"`
+		MD5            string          `json:"md5"`
+	}
+	if err := json.Unmarshal(data, &wire); err != nil {
+		return err
+	}
+	fsID, err := parseJSONInt64(wire.FsID)
+	if err != nil {
+		return fmt.Errorf("invalid fs_id: %w", err)
+	}
+	*item = shareListItem{
+		FsID:           fsID,
+		ServerFilename: wire.ServerFilename,
+		Path:           wire.Path,
+		IsDir:          wire.IsDir,
+		Size:           wire.Size,
+		MD5:            wire.MD5,
+	}
+	return nil
+}
+
+func parseJSONInt64(raw json.RawMessage) (int64, error) {
+	trimmed := bytes.TrimSpace(raw)
+	if len(trimmed) == 0 || bytes.Equal(trimmed, []byte("null")) {
+		return 0, fmt.Errorf("value is missing or null")
+	}
+
+	var numeric int64
+	if err := json.Unmarshal(trimmed, &numeric); err == nil {
+		return numeric, nil
+	}
+
+	var text string
+	if err := json.Unmarshal(trimmed, &text); err != nil {
+		return 0, fmt.Errorf("must be an integer or decimal string")
+	}
+	if text == "" {
+		return 0, fmt.Errorf("decimal string is empty")
+	}
+	digits := text
+	if digits[0] == '-' {
+		digits = digits[1:]
+	}
+	if digits == "" {
+		return 0, fmt.Errorf("decimal string contains no digits")
+	}
+	for _, digit := range digits {
+		if digit < '0' || digit > '9' {
+			return 0, fmt.Errorf("decimal string contains non-digit characters")
+		}
+	}
+	value, err := strconv.ParseInt(text, 10, 64)
+	if err != nil {
+		return 0, fmt.Errorf("decimal string is outside int64 range: %w", err)
+	}
+	return value, nil
 }
 
 type shareListResponse struct {
