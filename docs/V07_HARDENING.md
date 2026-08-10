@@ -135,7 +135,7 @@ The prolonged mock test must be deterministic and suitable for normal CI; it mus
 
 The SQLite-backed prolonged gate uses a 64 KiB cache watermark, preserves remote-state evidence across process restarts, injects partial staging/download/Drive/cleanup failures, and verifies exact directory IDs, cleanup provenance, and `DRIVE_VERIFIED` evidence before any file reaches `DONE`.
 
-CI runs this 5,000-file SQLite gate without race instrumentation on both Windows and Linux. The Linux job then runs the remaining full suite with `-race`; the prolonged file is excluded only from that second invocation because instrumented pure-Go SQLite exceeds Go's default per-package 10-minute test timeout.
+Linux CI runs this 5,000-file SQLite gate separately with an explicit timeout, then runs the remaining full suite with `-race`. Windows CI runs the full functional suite except this platform-independent load gate: hosted Windows filesystem flush latency makes thousands of intentional SQLite commits exceed Go's default per-package timeout. The prolonged file is also excluded from the race invocation because instrumented pure-Go SQLite has the same timeout problem.
 
 ## Name/path hardening
 
