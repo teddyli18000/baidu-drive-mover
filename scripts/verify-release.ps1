@@ -102,8 +102,11 @@ finally {
 }
 
 $rootNames = @((Get-ChildItem -LiteralPath $appRoot -Force).Name | Sort-Object)
-if (($rootNames -join ',') -ne 'BaiduDriveMover.exe,temp') {
-    throw "Packaged first run wrote outside the allowed ./temp boundary: $($rootNames -join ', ')"
+if (($rootNames -join ',') -ne 'BaiduDriveMover.exe') {
+    throw "Packaged diagnostic run left unexpected application-root entries: $($rootNames -join ', ')"
+}
+if (Test-Path -LiteralPath (Join-Path $appRoot 'temp')) {
+    throw "Packaged diagnostic run did not remove its idle ./temp runtime"
 }
 if (Test-Path -LiteralPath (Join-Path $appRoot 'temp\tools\rclone\rclone.exe')) {
     throw "Local safety check unexpectedly provisioned a network helper"
