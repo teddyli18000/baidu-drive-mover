@@ -180,6 +180,55 @@ func TestScanRejectsNonPositiveFileIDs(t *testing.T) {
 	}
 }
 
+func TestScanAcceptsDecimalStringFileID(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, `{"errno":0,"list":[{"fs_id":"9223372036854775807","server_filename":"safe.bin","path":"/safe.bin","size":1,"isdir":0}]}`)
+	}))
+	defer server.Close()
+	client, _ := NewClient("BDUSS=fake; STOKEN=fake", WithBaseURL(server.URL))
+	link, _ := ParseShareLink("https://pan.baidu.com/s/1Synthetic")
+	sink := newMemorySink()
+	if err := client.Scan(context.Background(), "task", link, ShareContext{BDSToken: "t"}, sink); err != nil {
+		t.Fatal(err)
+	}
+	if file, ok := sink.files["9223372036854775807"]; !ok || file.Name != "safe.bin" {
+		t.Fatalf("decimal string fs_id was not preserved: %+v", sink.files)
+	}
+}
+
+func TestScanRejectsNonPositiveDecimalStringFileIDs(t *testing.T) {
+	for _, fsID := range []string{"0", "-1"} {
+		t.Run(fsID, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				fmt.Fprintf(w, `{"errno":0,"list":[{"fs_id":%q,"server_filename":"invalid-id.bin","path":"/invalid-id.bin","size":1,"isdir":0}]}`, fsID)
+			}))
+			defer server.Close()
+			client, _ := NewClient("BDUSS=fake; STOKEN=fake", WithBaseURL(server.URL))
+			link, _ := ParseShareLink("https://pan.baidu.com/s/1Synthetic")
+			err := client.Scan(context.Background(), "task", link, ShareContext{BDSToken: "t"}, newMemorySink())
+			if err == nil || !strings.Contains(err.Error(), "valid fs_id") {
+				t.Fatalf("expected non-positive decimal string fs_id rejection, got %v", err)
+			}
+		})
+	}
+}
+
+func TestShareListItemRejectsMalformedStringFileIDs(t *testing.T) {
+	for _, fsID := range []string{`null`, `""`, `"+1"`, `" 1"`, `"1.0"`, `"1e3"`, `"abc"`, `"9223372036854775808"`, `1.0`, `1e3`, `9223372036854775808`} {
+		t.Run(fsID, func(t *testing.T) {
+			var item shareListItem
+			err := json.Unmarshal([]byte(`{"fs_id":`+fsID+`}`), &item)
+			if err == nil || !strings.Contains(err.Error(), "invalid fs_id") {
+				t.Fatalf("expected invalid string fs_id rejection, got item=%+v err=%v", item, err)
+			}
+		})
+	}
+	var missing shareListItem
+	if err := json.Unmarshal([]byte(`{}`), &missing); err == nil || !strings.Contains(err.Error(), "invalid fs_id") {
+		t.Fatalf("expected missing fs_id rejection, got item=%+v err=%v", missing, err)
+	}
+}
+
 func TestScanRejectsUnsafeChildNamesAndPathMismatch(t *testing.T) {
 	tests := []shareListItem{
 		{FsID: 1, ServerFilename: "..", Path: "/..", Size: 1},
