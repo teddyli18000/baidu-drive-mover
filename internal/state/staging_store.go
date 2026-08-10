@@ -252,7 +252,8 @@ func (s *Store) RecordStagedFiles(ctx context.Context, taskID, batchID string, s
 	defer tx.Rollback()
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	for fileID, remotePath := range staged {
-		if !strings.HasPrefix(path.Clean(remotePath), baiduStagingRoot+"/") {
+		cleanRemotePath := path.Clean(remotePath)
+		if !strings.HasPrefix(cleanRemotePath, baiduStagingRoot+"/") {
 			return fmt.Errorf("refusing untrusted Baidu staging path %q", remotePath)
 		}
 		result, err := tx.ExecContext(ctx, `
@@ -260,7 +261,7 @@ UPDATE files SET status = ?, baidu_staging_path = ?, last_error = '', updated_at
 WHERE task_id = ? AND file_id = ?
   AND file_id IN (SELECT file_id FROM batch_files WHERE task_id = ? AND batch_id = ?)
   AND status IN (?, ?, ?)`,
-			FileBaiduStaged, path.Clean(remotePath), now, taskID, fileID, taskID, batchID, FilePlanned, FileBaiduStaging, FileFailedRetryable)
+			FileBaiduStaged, cleanRemotePath, now, taskID, fileID, taskID, batchID, FilePlanned, FileBaiduStaging, FileFailedRetryable)
 		if err != nil {
 			return fmt.Errorf("mark file %q staged: %w", fileID, err)
 		}
@@ -270,13 +271,31 @@ WHERE task_id = ? AND file_id = ?
 		}
 		if changed != 1 {
 			var status FileStatus
-			queryErr := tx.QueryRowContext(ctx, `SELECT status FROM files WHERE task_id = ? AND file_id = ?`, taskID, fileID).Scan(&status)
-			if queryErr != nil || status != FileBaiduStaged {
+			var existingRemotePath string
+			queryErr := tx.QueryRowContext(ctx, `
+SELECT status, baidu_staging_path FROM files WHERE task_id = ? AND file_id = ?`, taskID, fileID).Scan(&status, &existingRemotePath)
+			if queryErr != nil || !stagingConfirmationAlreadyConsumed(status) || existingRemotePath != cleanRemotePath {
 				return fmt.Errorf("file %q is not eligible for staged confirmation", fileID)
 			}
 		}
 	}
 	return tx.Commit()
+}
+
+func stagingConfirmationAlreadyConsumed(status FileStatus) bool {
+	switch status {
+	case FileBaiduStaged,
+		FileDownloading,
+		FileLocalReady,
+		FileDriveUploading,
+		FileDriveUploaded,
+		FileDriveVerified,
+		FileCleanupPending,
+		FileDone:
+		return true
+	default:
+		return false
+	}
 }
 
 func (s *Store) CompleteBatch(ctx context.Context, taskID, batchID string) error {
@@ -290,7 +309,12 @@ func (s *Store) CompleteBatch(ctx context.Context, taskID, batchID string) error
 SELECT COUNT(*)
 FROM batch_files bf
 JOIN files f ON f.task_id = bf.task_id AND f.file_id = bf.file_id
-WHERE bf.task_id = ? AND bf.batch_id = ? AND f.status != ?`, taskID, batchID, FileBaiduStaged).Scan(&remaining); err != nil {
+WHERE bf.task_id = ? AND bf.batch_id = ?
+  AND f.status NOT IN (?, ?, ?, ?, ?, ?, ?, ?)`,
+		taskID, batchID,
+		FileBaiduStaged, FileDownloading, FileLocalReady, FileDriveUploading,
+		FileDriveUploaded, FileDriveVerified, FileCleanupPending, FileDone,
+	).Scan(&remaining); err != nil {
 		return fmt.Errorf("count unstaged batch files: %w", err)
 	}
 	if remaining != 0 {

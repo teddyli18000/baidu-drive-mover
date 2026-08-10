@@ -31,7 +31,7 @@ Normal use should be:
 
 ## Development status
 
-Current milestone: **v0.6 Full Pipeline**.
+Current milestone: **v0.7 Hardening**.
 
 v0.6 closes the cooperative end-to-end pipeline:
 
@@ -46,6 +46,8 @@ share scan
 ```
 
 The scheduler is SQLite-driven and downstream-first: verified cleanup releases cache pressure before Drive upload, download, and additional Baidu staging are pumped. If a complete pass produces no durable state change, the task stops in a blocked state rather than busy-looping.
+
+v0.7 adds bounded typed retries only to safe Baidu read/reconcile calls, including rate-limit and server-outage handling with capped `Retry-After`. Transfer and delete mutations remain one-shot at the HTTP layer and rely on durable reconciliation before later attempts. Scanner and manifest hardening reject pagination stalls, identity rebinding, path collisions, malicious child paths, and silent filename normalization. Credential-free large-share and prolonged restart simulations exercise convergence under repeated faults and cache pressure.
 
 Cleanup is deliberately fail-closed. A staging batch cannot be cleaned until every file in it has a persisted Drive ID and has reached `DRIVE_VERIFIED`. One SQLite transaction changes the batch to `CLEANUP_PENDING` and authorizes only the exact registered opaque local cache files and the exact `/BaiduDriveMover/<task-id>/<batch-id>` directory. Each successful deletion is recorded independently so restart can reconcile a crash between destructive steps.
 
@@ -63,6 +65,7 @@ Design and release gates:
 - `docs/TESTING.md`
 - `docs/V05_GOOGLE_DRIVE.md`
 - `docs/V06_FULL_PIPELINE.md`
+- `docs/V07_HARDENING.md`
 - `docs/RCLONE_PIN.md`
 
 The public repository must never contain real account cookies/tokens, browser profiles, task databases, private share manifests, logs, downloaded files, or rclone OAuth configuration.

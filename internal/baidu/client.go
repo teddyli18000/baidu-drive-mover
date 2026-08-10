@@ -3,6 +3,7 @@ package baidu
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -13,11 +14,14 @@ import (
 )
 
 const (
-	defaultBaseURL    = "https://pan.baidu.com"
-	defaultPCSBaseURL = "https://pcs.baidu.com"
-	defaultUserAgent  = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0.0.0 Safari/537.36"
-	panAppID          = "250528"
+	defaultBaseURL        = "https://pan.baidu.com"
+	defaultPCSBaseURL     = "https://pcs.baidu.com"
+	defaultUserAgent      = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0.0.0 Safari/537.36"
+	panAppID              = "250528"
+	defaultMaxListRetries = 4
 )
+
+var errResponseTooLarge = errors.New("Baidu response exceeded size limit")
 
 type ClientOption func(*clientOptions)
 
@@ -60,7 +64,7 @@ func NewClient(cookieHeader string, opts ...ClientOption) (*Client, error) {
 		baseURL:        defaultBaseURL,
 		pcsBaseURL:     defaultPCSBaseURL,
 		now:            time.Now,
-		maxListRetries: 4,
+		maxListRetries: defaultMaxListRetries,
 		sleep: func(ctx context.Context, d time.Duration) error {
 			timer := time.NewTimer(d)
 			defer timer.Stop()
@@ -135,7 +139,7 @@ func (c *Client) HasLoginCookies() bool {
 }
 
 func (c *Client) AccessSharePage(ctx context.Context, link ShareLink) (ShareContext, error) {
-	body, status, err := c.do(ctx, http.MethodGet, "/s/"+url.PathEscape(link.Feature), nil, nil, "https://pan.baidu.com/disk/home", 16<<20)
+	body, status, err := c.doRead(ctx, http.MethodGet, "/s/"+url.PathEscape(link.Feature), nil, nil, "https://pan.baidu.com/disk/home", 16<<20)
 	if err != nil {
 		return ShareContext{}, err
 	}
@@ -197,8 +201,26 @@ func (c *Client) do(ctx context.Context, method, endpoint string, query, form ur
 	return c.doAt(ctx, c.baseURL, method, endpoint, query, form, referer, maxBytes)
 }
 
+func (c *Client) doRead(ctx context.Context, method, endpoint string, query, form url.Values, referer string, maxBytes int64) ([]byte, int, error) {
+	if method != http.MethodGet && !(method == http.MethodPost && endpoint == "/share/list") {
+		return nil, 0, fmt.Errorf("refusing bounded read retry for %s %s", method, endpoint)
+	}
+	return c.retryRead(ctx, "Baidu read request", func() ([]byte, int, error) {
+		return c.do(ctx, method, endpoint, query, form, referer, maxBytes)
+	})
+}
+
 func (c *Client) doPCS(ctx context.Context, method, endpoint string, query, form url.Values, maxBytes int64) ([]byte, int, error) {
 	return c.doAt(ctx, c.pcsBaseURL, method, endpoint, query, form, "", maxBytes)
+}
+
+func (c *Client) doPCSRead(ctx context.Context, method, endpoint string, query, form url.Values, maxBytes int64) ([]byte, int, error) {
+	if method != http.MethodGet {
+		return nil, 0, fmt.Errorf("refusing bounded PCS read retry for %s %s", method, endpoint)
+	}
+	return c.retryRead(ctx, "Baidu PCS read request", func() ([]byte, int, error) {
+		return c.doPCS(ctx, method, endpoint, query, form, maxBytes)
+	})
 }
 
 func (c *Client) doAt(ctx context.Context, base *url.URL, method, endpoint string, query, form url.Values, referer string, maxBytes int64) ([]byte, int, error) {
@@ -225,12 +247,28 @@ func (c *Client) doAt(ctx context.Context, base *url.URL, method, endpoint strin
 	}
 	response, err := c.httpClient.Do(request)
 	if err != nil {
-		return nil, 0, fmt.Errorf("Baidu request failed: %w", err)
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return nil, 0, ctxErr
+		}
+		return nil, 0, &TransientError{Operation: "Baidu request", Err: err}
 	}
 	defer response.Body.Close()
 	data, err := readLimited(response.Body, maxBytes)
 	if err != nil {
-		return nil, response.StatusCode, err
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return nil, response.StatusCode, ctxErr
+		}
+		if errors.Is(err, errResponseTooLarge) {
+			return nil, response.StatusCode, err
+		}
+		return nil, response.StatusCode, &TransientError{Operation: "read Baidu response", Status: response.StatusCode, Err: err}
+	}
+	if response.StatusCode == http.StatusTooManyRequests || response.StatusCode >= 500 {
+		return nil, response.StatusCode, &TransientError{
+			Operation:  "Baidu request",
+			Status:     response.StatusCode,
+			RetryAfter: parseRetryAfter(response.Header.Get("Retry-After"), c.now()),
+		}
 	}
 	return data, response.StatusCode, nil
 }
@@ -245,7 +283,7 @@ func readLimited(reader io.Reader, maxBytes int64) ([]byte, error) {
 		return nil, fmt.Errorf("read Baidu response: %w", err)
 	}
 	if int64(len(data)) > maxBytes {
-		return nil, fmt.Errorf("Baidu response exceeded %d bytes", maxBytes)
+		return nil, fmt.Errorf("%w: limit %d bytes", errResponseTooLarge, maxBytes)
 	}
 	return data, nil
 }

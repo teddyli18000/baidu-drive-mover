@@ -59,5 +59,7 @@ jobs:
             gofmt -d ./cmd ./internal
             exit 1
           fi
+      - name: Run prolonged SQLite restart gate without race instrumentation
+        run: go test ./internal/app -run '^TestProlongedMigrationPersistsAcrossSQLiteRestarts$' -count=1 -timeout=15m
       - name: Test with race detector
         run: go test -race ./... -count=1
