@@ -22,6 +22,11 @@ type BrowserLogin interface {
 	Login(ctx context.Context) (string, error)
 }
 
+// A scan pass may refresh the dedicated browser session once after the
+// service reports that the current authentication has expired. Keeping this
+// bound explicit prevents a persistent auth failure from prompting forever.
+const maxScanAuthRetries = 1
+
 type BaiduAPI interface {
 	AccessSharePage(ctx context.Context, link baidu.ShareLink) (baidu.ShareContext, error)
 	VerifyPassword(ctx context.Context, link baidu.ShareLink, share baidu.ShareContext, password string) error
@@ -63,9 +68,43 @@ func (r *ScanRunner) Run(ctx context.Context, rawLink string) (string, manifest.
 	}); err != nil {
 		return "", manifest.Stats{}, err
 	}
+	return r.scanTask(ctx, taskID, link)
+}
+
+// Resume continues an existing incomplete scan with the same durable task ID.
+// Re-scanning is safe because manifest writes enforce stable source identity.
+func (r *ScanRunner) Resume(ctx context.Context, task state.Task) (string, manifest.Stats, error) {
+	if err := r.validate(); err != nil {
+		return task.ID, manifest.Stats{}, err
+	}
+	if task.ID == "" || task.ShareURL == "" {
+		return task.ID, manifest.Stats{}, fmt.Errorf("resumable task identity is incomplete")
+	}
+	if task.ScanCompleted {
+		return task.ID, manifest.Stats{}, fmt.Errorf("task %q scan is already complete", task.ID)
+	}
+	link, err := baidu.ParseShareLink(task.ShareURL)
+	if err != nil {
+		return task.ID, manifest.Stats{}, fmt.Errorf("parse stored share link: %w", err)
+	}
+	link.Password = task.ExtractionCode
+	if err := r.Store.UpdateTaskStatus(ctx, task.ID, state.TaskScanning, ""); err != nil {
+		return task.ID, manifest.Stats{}, err
+	}
+	return r.scanTask(ctx, task.ID, link)
+}
+
+func (r *ScanRunner) validate() error {
+	if r == nil || r.Layout == nil || r.Store == nil || r.Browser == nil || r.NewClient == nil || r.Input == nil || r.Output == nil {
+		return fmt.Errorf("scan runner is not fully configured")
+	}
+	return nil
+}
+
+func (r *ScanRunner) scanTask(ctx context.Context, taskID string, link baidu.ShareLink) (string, manifest.Stats, error) {
 
 	fail := func(runErr error) (string, manifest.Stats, error) {
-		status := state.TaskFailed
+		status := state.TaskBlocked
 		if errors.Is(runErr, context.Canceled) || errors.Is(runErr, context.DeadlineExceeded) {
 			status = state.TaskPaused
 		}
@@ -113,8 +152,32 @@ func (r *ScanRunner) Run(ctx context.Context, rawLink string) (string, manifest.
 		}
 	}
 
+	authRetries := 0
 	for {
 		err = api.Scan(ctx, taskID, link, share, r.Store)
+		if errors.Is(err, baidu.ErrAuthRequired) && authRetries < maxScanAuthRetries {
+			authRetries++
+			api, err = r.loginAndCreateClient(ctx)
+			if err != nil {
+				return fail(err)
+			}
+			// ShareContext contains session-bound values such as BDSToken. A
+			// newly authenticated client must never continue with the stale
+			// context that caused the authentication failure.
+			share, err = api.AccessSharePage(ctx, link)
+			if err != nil {
+				return fail(err)
+			}
+			if link.Password != "" {
+				if err := api.VerifyPassword(ctx, link, share, link.Password); err != nil {
+					return fail(err)
+				}
+				if err := r.CookieStore.Save(api.CookieString()); err != nil {
+					return fail(err)
+				}
+			}
+			continue
+		}
 		if !errors.Is(err, baidu.ErrPasswordRequired) {
 			break
 		}
@@ -137,7 +200,7 @@ func (r *ScanRunner) Run(ctx context.Context, rawLink string) (string, manifest.
 	if err != nil {
 		return fail(err)
 	}
-	if err := r.Store.UpdateTaskStatus(ctx, taskID, state.TaskPaused, ""); err != nil {
+	if err := r.Store.CompleteTaskScan(ctx, taskID); err != nil {
 		return fail(err)
 	}
 	if r.Logger != nil {

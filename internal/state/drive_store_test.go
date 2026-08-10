@@ -76,8 +76,8 @@ VALUES('task-v2', 'baidu_batch_dir', 'b-1', '/BaiduDriveMover/task-v2/b-1', 0, ?
 	if err != nil {
 		t.Fatal(err)
 	}
-	if version != 4 {
-		t.Fatalf("schema=%d want=4", version)
+	if version != schemaVersion {
+		t.Fatalf("schema=%d want=%d", version, schemaVersion)
 	}
 	task, err := store.GetTask(ctx, "task-v2")
 	if err != nil {

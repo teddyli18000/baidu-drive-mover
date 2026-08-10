@@ -6,6 +6,7 @@ import (
 )
 
 type PipelineProgress struct {
+	ScanIncomplete          bool
 	Total                   int
 	Discovered              int
 	Planned                 int
@@ -111,6 +112,7 @@ GROUP BY status`, taskID)
 	if err != nil {
 		return PipelineProgress{}, err
 	}
+	progress.ScanIncomplete = !task.ScanCompleted
 	progress.DriveRootReady = task.DriveRootID != "" && task.DriveRootName != ""
 	registered, cleaned, err := s.BaiduTaskRootCleanupState(ctx, taskID)
 	if err != nil {

@@ -31,6 +31,68 @@ type fakeAPI struct {
 	verified        bool
 }
 
+type scanAuthState struct {
+	scanCalls     int
+	authFailures  int
+	clientCookies []string
+	accessTokens  []string
+	scanTokens    []string
+}
+
+type scanAuthAPI struct {
+	state  *scanAuthState
+	cookie string
+}
+
+func (a *scanAuthAPI) AccessSharePage(context.Context, baidu.ShareLink) (baidu.ShareContext, error) {
+	token := "token-" + a.cookie
+	a.state.accessTokens = append(a.state.accessTokens, token)
+	return baidu.ShareContext{BDSToken: token, ShareID: "1", ShareUK: "2"}, nil
+}
+
+func (a *scanAuthAPI) VerifyPassword(context.Context, baidu.ShareLink, baidu.ShareContext, string) error {
+	return nil
+}
+
+func (a *scanAuthAPI) Scan(ctx context.Context, taskID string, _ baidu.ShareLink, share baidu.ShareContext, sink manifest.Sink) error {
+	a.state.scanCalls++
+	a.state.scanTokens = append(a.state.scanTokens, share.BDSToken)
+	if err := sink.UpsertManifestPage(ctx, taskID,
+		[]manifest.Directory{{LogicalPath: "/folder"}},
+		[]manifest.File{{SourceID: "101", LogicalPath: "/folder/file.bin", ParentPath: "/folder", Name: "file.bin", Size: 42}},
+	); err != nil {
+		return err
+	}
+	if a.state.scanCalls <= a.state.authFailures {
+		return baidu.ErrAuthRequired
+	}
+	return nil
+}
+
+func (a *scanAuthAPI) CookieString() string { return a.cookie }
+
+func (a *scanAuthAPI) HasLoginCookies() bool {
+	return strings.Contains(a.cookie, "BDUSS=") && strings.Contains(a.cookie, "STOKEN=")
+}
+
+type canceledScanAPI struct{}
+
+func (canceledScanAPI) AccessSharePage(context.Context, baidu.ShareLink) (baidu.ShareContext, error) {
+	return baidu.ShareContext{BDSToken: "cancel-token", ShareID: "1", ShareUK: "2"}, nil
+}
+
+func (canceledScanAPI) VerifyPassword(context.Context, baidu.ShareLink, baidu.ShareContext, string) error {
+	return nil
+}
+
+func (canceledScanAPI) Scan(context.Context, string, baidu.ShareLink, baidu.ShareContext, manifest.Sink) error {
+	return context.Canceled
+}
+
+func (canceledScanAPI) CookieString() string { return "BDUSS=initial; STOKEN=initial" }
+
+func (canceledScanAPI) HasLoginCookies() bool { return true }
+
 func (a *fakeAPI) AccessSharePage(context.Context, baidu.ShareLink) (baidu.ShareContext, error) {
 	if !a.loggedIn {
 		return baidu.ShareContext{}, baidu.ErrAuthRequired
@@ -118,6 +180,13 @@ func TestScanRunnerUsesDedicatedBrowserOnlyWhenLoginMissing(t *testing.T) {
 	if taskID == "" || stats.Files != 1 || stats.Directories != 1 || stats.Bytes != 42 {
 		t.Fatalf("unexpected result task=%q stats=%+v", taskID, stats)
 	}
+	task, err := runner.Store.GetTask(context.Background(), taskID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !task.ScanCompleted {
+		t.Fatal("successful scan did not record scan completion")
+	}
 	if browser.calls != 1 {
 		t.Fatalf("browser login calls=%d want=1", browser.calls)
 	}
@@ -157,6 +226,92 @@ func TestScanRunnerPromptsWhenScannerRequiresPassword(t *testing.T) {
 	}
 }
 
+func TestScanRunnerReauthenticatesAfterMidScanAuthExpiry(t *testing.T) {
+	browser := &fakeBrowser{cookies: "BDUSS=refreshed; STOKEN=refreshed"}
+	runner, store := newRunnerForTest(t, "BDUSS=initial; STOKEN=initial", "", browser, false)
+	state := &scanAuthState{authFailures: 1}
+	runner.NewClient = func(cookieHeader string) (BaiduAPI, error) {
+		state.clientCookies = append(state.clientCookies, cookieHeader)
+		return &scanAuthAPI{state: state, cookie: cookieHeader}, nil
+	}
+
+	taskID, stats, err := runner.Run(context.Background(), "https://pan.baidu.com/s/1Synthetic")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stats.Files != 1 || stats.Directories != 1 || stats.Bytes != 42 {
+		t.Fatalf("unexpected stats: %+v", stats)
+	}
+	if browser.calls != 1 {
+		t.Fatalf("browser login calls=%d want=1", browser.calls)
+	}
+	if state.scanCalls != 2 {
+		t.Fatalf("scan calls=%d want=2", state.scanCalls)
+	}
+	if len(state.clientCookies) != 2 || state.clientCookies[1] != browser.cookies {
+		t.Fatalf("client cookies=%v want refreshed cookie on rebuild", state.clientCookies)
+	}
+	if len(state.accessTokens) != 2 || len(state.scanTokens) != 2 || state.scanTokens[1] != state.accessTokens[1] || state.scanTokens[1] == state.scanTokens[0] {
+		t.Fatalf("share context was not refreshed after login: access=%v scan=%v", state.accessTokens, state.scanTokens)
+	}
+	savedCookie, err := runner.CookieStore.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if savedCookie != browser.cookies {
+		t.Fatalf("saved cookie=%q want %q", savedCookie, browser.cookies)
+	}
+	task, err := store.GetTask(context.Background(), taskID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !task.ScanCompleted {
+		t.Fatal("recovered scan did not record scan completion")
+	}
+}
+
+func TestScanRunnerBoundsRepeatedAuthExpiry(t *testing.T) {
+	browser := &fakeBrowser{cookies: "BDUSS=refreshed; STOKEN=refreshed"}
+	runner, store := newRunnerForTest(t, "BDUSS=initial; STOKEN=initial", "", browser, false)
+	state := &scanAuthState{authFailures: 2}
+	runner.NewClient = func(cookieHeader string) (BaiduAPI, error) {
+		state.clientCookies = append(state.clientCookies, cookieHeader)
+		return &scanAuthAPI{state: state, cookie: cookieHeader}, nil
+	}
+
+	taskID, _, err := runner.Run(context.Background(), "https://pan.baidu.com/s/1Synthetic")
+	if !errors.Is(err, baidu.ErrAuthRequired) {
+		t.Fatalf("error=%v want auth required", err)
+	}
+	if browser.calls != 1 {
+		t.Fatalf("browser login calls=%d want=1", browser.calls)
+	}
+	if state.scanCalls != 2 || len(state.clientCookies) != 2 {
+		t.Fatalf("scan calls=%d client calls=%d want 2 each", state.scanCalls, len(state.clientCookies))
+	}
+	task, getErr := store.GetTask(context.Background(), taskID)
+	if getErr != nil {
+		t.Fatal(getErr)
+	}
+	if task.ScanCompleted {
+		t.Fatal("failed scan was marked complete")
+	}
+}
+
+func TestScanRunnerPropagatesCancellationUnchanged(t *testing.T) {
+	browser := &fakeBrowser{cookies: "BDUSS=unused; STOKEN=unused"}
+	runner, _ := newRunnerForTest(t, "BDUSS=initial; STOKEN=initial", "", browser, false)
+	runner.NewClient = func(string) (BaiduAPI, error) { return canceledScanAPI{}, nil }
+
+	_, _, err := runner.Run(context.Background(), "https://pan.baidu.com/s/1Synthetic")
+	if err != context.Canceled {
+		t.Fatalf("error=%v want exact context.Canceled", err)
+	}
+	if browser.calls != 0 {
+		t.Fatalf("browser login calls=%d want=0", browser.calls)
+	}
+}
+
 func TestScanRunnerRejectsInvalidLinkBeforeCreatingTask(t *testing.T) {
 	browser := &fakeBrowser{cookies: "BDUSS=fake; STOKEN=fake"}
 	runner, _ := newRunnerForTest(t, "BDUSS=fake; STOKEN=fake", "", browser, false)
@@ -166,5 +321,38 @@ func TestScanRunnerRejectsInvalidLinkBeforeCreatingTask(t *testing.T) {
 	}
 	if errors.Is(err, baidu.ErrAuthRequired) {
 		t.Fatalf("unexpected auth error for invalid link: %v", err)
+	}
+}
+
+func TestScanRunnerResumesIncompleteScanWithSameTask(t *testing.T) {
+	browser := &fakeBrowser{cookies: "BDUSS=unused; STOKEN=unused"}
+	runner, store := newRunnerForTest(t, "BDUSS=fake; STOKEN=fake", "", browser, false)
+	const taskID = "task-resume-scan"
+	if err := store.CreateTask(context.Background(), state.Task{
+		ID: taskID, ShareURL: "https://pan.baidu.com/s/1Synthetic", Status: state.TaskPaused,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.UpsertManifestPage(context.Background(), taskID, nil, []manifest.File{{
+		SourceID: "101", LogicalPath: "/folder/file.bin", ParentPath: "/folder", Name: "file.bin", Size: 42,
+	}}); err != nil {
+		t.Fatal(err)
+	}
+
+	resumedID, stats, err := runner.Resume(context.Background(), state.Task{
+		ID: taskID, ShareURL: "https://pan.baidu.com/s/1Synthetic", Status: state.TaskPaused,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resumedID != taskID || stats.Files != 1 || stats.Bytes != 42 {
+		t.Fatalf("resume id=%q stats=%+v", resumedID, stats)
+	}
+	task, err := store.GetTask(context.Background(), taskID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !task.ScanCompleted {
+		t.Fatal("resumed scan was not marked complete")
 	}
 }

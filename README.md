@@ -29,9 +29,34 @@ Normal use should be:
 - The Baidu recycle bin is never automatically emptied.
 - The pipeline must be resumable and idempotent.
 
+## Installation and normal use
+
+The v0.8 Windows package targets Windows x64. Extract the ZIP into a folder where your account can create files, then run `BaiduDriveMover.exe`. Normal users do not need Go, Python, Node.js, Conda, or WSL. Google Chrome is required for the isolated Baidu login window; Baidu and Google accounts plus network access are required for a real migration.
+
+The first launch creates only `temp/` beside the executable. Keep the application in the same folder while a task is active: `temp/` contains resumable state, opaque cache data, Baidu cookies, Google OAuth configuration, private share metadata, and logs. Do not upload, sync, or send this directory as a support bundle. Removing the whole application folder removes local state, but it cannot clean remote staging left by an unfinished task.
+
+Run modes:
+
+```text
+BaiduDriveMover.exe              resume the most recently updated unfinished task, or prompt for a new link
+BaiduDriveMover.exe -new         deliberately start another task
+BaiduDriveMover.exe -list        list resumable tasks
+BaiduDriveMover.exe -resume ID   resume one listed task
+BaiduDriveMover.exe -check       validate only the local temp/SQLite safety boundary
+BaiduDriveMover.exe -version     print release identity
+```
+
+During first Drive use, the verified pinned rclone helper is downloaded into `temp/tools/` and opens an OAuth flow for the private `drive.file` scope. Each task creates a new `BaiduDriveMover-<task-id>` Drive folder. Do not move or rename that folder before the task completes. The tool never deletes destination Drive objects.
+
+Release downloads include `SHA256SUMS.txt`; verify the ZIP hash before extraction:
+
+```powershell
+(Get-FileHash .\BaiduDriveMover-0.8.0-windows-amd64.zip -Algorithm SHA256).Hash
+```
+
 ## Development status
 
-Current milestone: **v0.7 Hardening**.
+Current milestone: **v0.8 Packaged Windows Beta**.
 
 v0.6 closes the cooperative end-to-end pipeline:
 
@@ -48,6 +73,8 @@ share scan
 The scheduler is SQLite-driven and downstream-first: verified cleanup releases cache pressure before Drive upload, download, and additional Baidu staging are pumped. If a complete pass produces no durable state change, the task stops in a blocked state rather than busy-looping.
 
 v0.7 adds bounded typed retries only to safe Baidu read/reconcile calls, including rate-limit and server-outage handling with capped `Retry-After`. Transfer and delete mutations remain one-shot at the HTTP layer and rely on durable reconciliation before later attempts. Scanner and manifest hardening reject pagination stalls, identity rebinding, path collisions, malicious child paths, and silent filename normalization. Credential-free large-share and prolonged restart simulations exercise convergence under repeated faults and cache pressure.
+
+v0.8 adds durable scan-completion evidence and a real CLI resume path, so restart reuses the original task rather than creating a duplicate. It also adds a process-level folder lock and a reproducible Windows package gate with a one-file allowlist, version/commit binding, SHA-256 output, minimal-`PATH` execution, and first-run write-boundary verification.
 
 Cleanup is deliberately fail-closed. A staging batch cannot be cleaned until every file in it has a persisted Drive ID and has reached `DRIVE_VERIFIED`. One SQLite transaction changes the batch to `CLEANUP_PENDING` and authorizes only the exact registered opaque local cache files and the exact `/BaiduDriveMover/<task-id>/<batch-id>` directory. Each successful deletion is recorded independently so restart can reconcile a crash between destructive steps.
 
@@ -66,6 +93,7 @@ Design and release gates:
 - `docs/V05_GOOGLE_DRIVE.md`
 - `docs/V06_FULL_PIPELINE.md`
 - `docs/V07_HARDENING.md`
+- `docs/V08_PACKAGING.md`
 - `docs/RCLONE_PIN.md`
 
 The public repository must never contain real account cookies/tokens, browser profiles, task databases, private share manifests, logs, downloaded files, or rclone OAuth configuration.

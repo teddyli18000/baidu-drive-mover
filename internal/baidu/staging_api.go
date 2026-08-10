@@ -147,7 +147,7 @@ func (c *Client) TransferFiles(ctx context.Context, link ShareLink, share ShareC
 	if err != nil {
 		return err
 	}
-	if status < 200 || status >= 500 {
+	if status < 200 || status >= 300 {
 		return fmt.Errorf("Baidu share transfer returned HTTP %d", status)
 	}
 	var response struct {

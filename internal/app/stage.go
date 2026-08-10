@@ -25,19 +25,37 @@ type StagingBaiduAPI interface {
 type StageClientFactory func(cookieHeader string) (StagingBaiduAPI, error)
 
 type StageRunner struct {
-	Store         *state.Store
-	Browser       BrowserLogin
-	NewClient     StageClientFactory
-	CookieStore   baidu.CookieStore
-	Output        io.Writer
-	Logger        *slog.Logger
-	BatchSize     int
-	MaxBatches    int
+	Store       *state.Store
+	Browser     BrowserLogin
+	NewClient   StageClientFactory
+	CookieStore baidu.CookieStore
+	Output      io.Writer
+	Logger      *slog.Logger
+	BatchSize   int
+	MaxBatches  int
+	// MaxCacheBytes is the global local-cache limit. MaxBatchBytes is the
+	// current per-pass capacity supplied by the pipeline. A batch may be
+	// deferred when it fits the global limit but not the current capacity.
+	MaxCacheBytes int64
 	MaxBatchBytes int64
 }
 
 type StageSummary struct {
 	FilesStaged int
+}
+
+// StagingDeferredByWatermarkError means that the next pending batch is valid
+// under the global cache limit but cannot fit in the currently available
+// cache. It is a pause signal, not a permanent task failure.
+type StagingDeferredByWatermarkError struct {
+	BatchID   string
+	Bytes     int64
+	Available int64
+	Limit     int64
+}
+
+func (e *StagingDeferredByWatermarkError) Error() string {
+	return fmt.Sprintf("staging batch %s requires %d bytes but only %d cache bytes are currently available (global limit %d)", e.BatchID, e.Bytes, e.Available, e.Limit)
 }
 
 type limitedStagingRepository struct {
@@ -86,9 +104,27 @@ func (r *StageRunner) Run(ctx context.Context, taskID string) (StageSummary, err
 	}
 	for i := 0; i < checkCount; i++ {
 		batch := pending[i]
-		if r.MaxBatchBytes > 0 && batch.TotalBytes > r.MaxBatchBytes {
-			err := &StagingBatchTooLargeError{BatchID: batch.BatchID, Bytes: batch.TotalBytes, Limit: r.MaxBatchBytes}
+		if r.MaxCacheBytes > 0 && batch.TotalBytes > r.MaxCacheBytes {
+			err := &StagingBatchTooLargeError{BatchID: batch.BatchID, Bytes: batch.TotalBytes, Limit: r.MaxCacheBytes}
 			_ = r.Store.UpdateTaskStatus(context.Background(), taskID, state.TaskBlocked, safeError(err))
+			return StageSummary{}, err
+		}
+		if r.MaxBatchBytes > 0 && batch.TotalBytes > r.MaxBatchBytes {
+			available := r.MaxBatchBytes
+			if available < 0 {
+				available = 0
+			}
+			limit := r.MaxCacheBytes
+			if limit <= 0 {
+				limit = r.MaxBatchBytes
+			}
+			err := &StagingDeferredByWatermarkError{
+				BatchID:   batch.BatchID,
+				Bytes:     batch.TotalBytes,
+				Available: available,
+				Limit:     limit,
+			}
+			_ = r.Store.UpdateTaskStatus(context.Background(), taskID, state.TaskPaused, safeError(err))
 			return StageSummary{}, err
 		}
 	}

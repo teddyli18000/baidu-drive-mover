@@ -54,7 +54,7 @@ func TestProlongedMigrationPersistsAcrossSQLiteRestarts(t *testing.T) {
 	store := openProlongedStore(t, dbPath)
 	defer func() { _ = store.Close() }()
 
-	if err := store.CreateTask(ctx, state.Task{ID: taskID, ShareURL: "https://pan.baidu.com/s/1Synthetic", Status: state.TaskScanning}); err != nil {
+	if err := store.CreateTask(ctx, state.Task{ID: taskID, ShareURL: "https://pan.baidu.com/s/1Synthetic", Status: state.TaskScanning, ScanCompleted: true}); err != nil {
 		t.Fatal(err)
 	}
 	directories := []manifest.Directory{

@@ -244,6 +244,8 @@ No automatic transfer yet.
 - clean uninstall-by-folder-removal behavior
 - release CI
 
+Implementation status: implemented for v0.8 development. The durable CLI resume path, reproducible package build, independent package smoke test, and release gates are part of the acceptance contract.
+
 ### Phase J - v0.9 beta / v1.0 stable
 
 - real multi-hour migration tests
