@@ -59,7 +59,7 @@ func (c *Client) EnsureStagingDirectory(ctx context.Context, remotePath string) 
 
 func (c *Client) mkdirPCS(ctx context.Context, remotePath string) error {
 	query := url.Values{}
-	query.Set("app_id", panAppID)
+	query.Set("app_id", pcsAppID)
 	query.Set("method", "mkdir")
 	query.Set("path", remotePath)
 	body, status, err := c.doPCS(ctx, http.MethodPost, "/rest/2.0/pcs/file", query, nil, 2<<20)
@@ -88,7 +88,7 @@ func (c *Client) ListStagingDirectory(ctx context.Context, remotePath string) ([
 		return nil, err
 	}
 	query := url.Values{}
-	query.Set("app_id", panAppID)
+	query.Set("app_id", pcsAppID)
 	query.Set("method", "list")
 	query.Set("path", clean)
 	query.Set("by", "name")
@@ -127,6 +127,9 @@ func (c *Client) TransferFiles(ctx context.Context, link ShareLink, share ShareC
 	clean, err := validateStagingRemotePath(remotePath)
 	if err != nil {
 		return err
+	}
+	if share.UK != "" && share.UK == share.ShareUK {
+		return c.copyOwnFiles(ctx, link, share, fsIDs, clean)
 	}
 	encodedIDs, err := json.Marshal(fsIDs)
 	if err != nil {

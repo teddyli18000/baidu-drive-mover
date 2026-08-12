@@ -10,7 +10,7 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-const schemaVersion = 5
+const schemaVersion = 6
 
 type Store struct {
 	db *sql.DB
@@ -117,6 +117,15 @@ CREATE TABLE IF NOT EXISTS schema_migrations (
 			return err
 		}
 		if err := recordMigration(ctx, tx, 5); err != nil {
+			return err
+		}
+		current = 5
+	}
+	if current < 6 {
+		if err := migrationV6(ctx, tx); err != nil {
+			return err
+		}
+		if err := recordMigration(ctx, tx, 6); err != nil {
 			return err
 		}
 	}
@@ -268,6 +277,38 @@ func migrationV5(ctx context.Context, tx *sql.Tx) error {
 		if _, err := tx.ExecContext(ctx, stmt); err != nil {
 			return fmt.Errorf("apply schema v5: %w", err)
 		}
+	}
+	return nil
+}
+
+func migrationV6(ctx context.Context, tx *sql.Tx) error {
+	invalidMD5 := `(md5 != '' AND (LENGTH(md5) != 32 OR LOWER(md5) GLOB '*[^0-9a-f]*'))`
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	if _, err := tx.ExecContext(ctx, `
+UPDATE tasks
+SET status = 'PAUSED', last_error = '', updated_at = ?
+WHERE status = 'BLOCKED'
+  AND EXISTS (
+    SELECT 1 FROM files
+    WHERE files.task_id = tasks.id
+      AND files.status = 'FAILED_PERMANENT'
+      AND files.baidu_staging_path != ''
+      AND LOWER(files.last_error) LIKE '%md5 mismatch%'
+      AND `+invalidMD5+`
+  )`, now); err != nil {
+		return fmt.Errorf("recover tasks blocked by invalid provider MD5: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, `
+UPDATE files
+SET status = 'BAIDU_STAGED', md5 = '', retry_count = 0, last_error = '', updated_at = ?
+WHERE status = 'FAILED_PERMANENT'
+  AND baidu_staging_path != ''
+  AND LOWER(last_error) LIKE '%md5 mismatch%'
+  AND `+invalidMD5, now); err != nil {
+		return fmt.Errorf("recover files failed by invalid provider MD5: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, `UPDATE files SET md5 = '' WHERE `+invalidMD5); err != nil {
+		return fmt.Errorf("clear invalid provider MD5 values: %w", err)
 	}
 	return nil
 }

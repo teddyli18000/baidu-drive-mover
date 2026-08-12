@@ -297,3 +297,31 @@ Reason: all local runtime artifacts are private and tool-owned, but some are als
 Decision: share-page parsing checks both direct JSON objects and plausible embedded strings decoded from those objects. Embedded traversal is bounded by nesting depth, total scanned bytes, object count, object bytes, and enclosing-object depth. A valid context still requires `loginstate`, `bdstoken`, `shareid`, and `share_uk` in one decoded object; values from separate objects are never combined.
 
 Reason: a live Baidu share page returned HTTP 200 with its complete `locals.mset(...)` bootstrap inside `locals.share[]`. Treating only direct page objects as authoritative falsely classified an authenticated session as logged out and prompted for a second QR login. Bounded recursive parsing accepts the provider's alternate serialization without turning the HTML parser into an unbounded general-purpose evaluator.
+
+## D28. PAN and PCS requests use separate provider application identities
+
+Decision: authenticated PAN Web requests, including share enumeration, transfer, and same-account copy, use application ID `250528`. Legacy PCS file operations for isolated staging (`mkdir`, `list`, `download`, and `delete`) use application ID `266719`. The IDs are distinct constants and tests assert the correct identity at each API boundary.
+
+Reason: a live authenticated session returned PCS error `31030` for every read and write made with the PAN application ID. The identical bounded PCS list request made with `266719` returned the expected `31066` not-found result for an absent tool root, proving that the session and endpoint were valid but the request used the wrong provider application identity. Keeping identities endpoint-specific prevents a working share API setting from silently breaking staging and cleanup.
+
+## D29. A share owned by the logged-in account uses bounded internal copy
+
+Decision: when the authenticated account `uk` exactly equals the share owner `share_uk`, staging does not call `/share/transfer`. For each bounded subset, the client re-enumerates the share through the hardened read-only scanner, resolves every requested immutable `fs_id` to one validated provider path, and submits a one-shot PAN `filemanager copy` into the same isolated batch directory. More than 100 items are split before mutation. Normal reconciliation remains authoritative after the copy and before any later attempt.
+
+The provider source path is carried only through the in-memory manifest page used for resolution; it never replaces the share-relative logical path or becomes a Drive path. Missing, duplicate, conflicting, or unsafe source identities stop before the copy request.
+
+Reason: Baidu returns parameter error `2` when an account attempts to save its own share through `/share/transfer`, even though authentication, source listing, and the isolated destination are valid. An account-internal copy is the equivalent bounded staging operation for files the logged-in account already owns, while preserving the existing download, Drive verification, and cleanup state machine.
+
+## D30. Only canonical provider MD5 values are source evidence
+
+Decision: a Baidu share-list `md5` is accepted only when the raw value is exactly 32 hexadecimal characters, with no leading or trailing whitespace; accepted values are then normalized to lowercase. Any other non-empty value is treated as unavailable rather than as a checksum. Download still enforces exact size, computes the local MD5, and Drive completion still requires equality with Drive's independently returned MD5.
+
+Schema v6 clears previously persisted non-canonical provider MD5 values. It narrowly recovers a staged file from `FAILED_PERMANENT` only when that invalid value caused a recorded cache-MD5 mismatch, retaining the cache path for fresh validation. Unrelated permanent failures remain permanent.
+
+Reason: live share enumeration returned a 32-character provider field containing non-hexadecimal characters for every file. Comparing that opaque value to a real MD5 falsely rejected correct downloads. Treating only canonical digests as optional source evidence preserves fail-closed Drive verification without granting an undocumented provider token checksum authority.
+
+## D31. Drive upload retries require a proven-empty destination
+
+Decision: a failed rclone `copyto` may be retried at most twice by the uploader, with cancellable one- and two-second delays. Every failed write is followed by Drive listing reconciliation, then a second listing after the delay. The next write is allowed only when both reads prove that no same-name object exists. A discovered matching object is adopted and independently verified; duplicate or conflicting objects fail permanently, and a failed reconciliation stops without replaying the write.
+
+Reason: controlled live migration observed transient pre-commit rclone failures that safely blocked the task but required manual resume. Retrying only after two successful absence proofs preserves the no-blind-replay invariant while allowing unattended migration to survive short transport failures.

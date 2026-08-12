@@ -254,11 +254,12 @@ func (c *Client) Scan(ctx context.Context, taskID string, link ShareLink, share 
 				}
 				files = append(files, manifest.File{
 					SourceID:    strconv.FormatInt(item.FsID, 10),
+					SourcePath:  fullPath,
 					LogicalPath: logicalPath,
 					ParentPath:  parent,
 					Name:        name,
 					Size:        item.Size,
-					MD5:         strings.TrimSpace(item.MD5),
+					MD5:         normalizeShareMD5(item.MD5),
 				})
 			}
 			if len(directories) > 0 || len(files) > 0 {
@@ -338,6 +339,18 @@ func safeShareEntryName(raw string) (string, error) {
 		return "", fmt.Errorf("Baidu returned unsafe path separator in filename %q", raw)
 	}
 	return name, nil
+}
+
+func normalizeShareMD5(raw string) string {
+	if len(raw) != 32 {
+		return ""
+	}
+	for _, char := range raw {
+		if !((char >= '0' && char <= '9') || (char >= 'a' && char <= 'f') || (char >= 'A' && char <= 'F')) {
+			return ""
+		}
+	}
+	return strings.ToLower(raw)
 }
 
 func canonicalRemoteItemPath(raw string) (string, error) {

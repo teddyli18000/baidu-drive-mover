@@ -17,6 +17,9 @@ func TestListStagingPathForCleanupReturnsExactEntries(t *testing.T) {
 		if r.URL.Query().Get("method") != "list" || r.URL.Query().Get("path") != "/BaiduDriveMover/task-safe" {
 			t.Fatalf("unexpected cleanup list query: %v", r.URL.Query())
 		}
+		if got := r.URL.Query().Get("app_id"); got != pcsAppID {
+			t.Fatalf("PCS app_id=%q want=%q", got, pcsAppID)
+		}
 		fmt.Fprint(w, `{"error_code":0,"list":[{"fs_id":1,"server_filename":"leftover","path":"/BaiduDriveMover/task-safe/leftover","size":0,"isdir":1}]}`)
 	}))
 	defer server.Close()
@@ -59,6 +62,9 @@ func TestDeleteStagingPathUsesOnlyValidatedPCSDelete(t *testing.T) {
 		}
 		if got := r.URL.Query().Get("path"); got != "/BaiduDriveMover/task-safe/b-123" {
 			t.Fatalf("path=%q", got)
+		}
+		if got := r.URL.Query().Get("app_id"); got != pcsAppID {
+			t.Fatalf("PCS app_id=%q want=%q", got, pcsAppID)
 		}
 		fmt.Fprint(w, `{"error_code":0}`)
 	}))

@@ -41,6 +41,17 @@ func fakeSharePage() string {
 	return `<html><script>boot({"wrapper":{"loginstate":1,"bdstoken":"fake-token","shareid":12345,"share_uk":67890,"uk":777}});</script></html>`
 }
 
+func TestNormalizeShareMD5AcceptsOnlyHexDigest(t *testing.T) {
+	if got := normalizeShareMD5("ABCDEF0123456789ABCDEF0123456789"); got != "abcdef0123456789abcdef0123456789" {
+		t.Fatalf("valid MD5=%q", got)
+	}
+	for _, invalid := range []string{"", "abc", " 0123456789abcdef0123456789abcdef ", "0123456789abcdef0123456789abcdeg", "0123456789abcdef0123456789abcdef00"} {
+		if got := normalizeShareMD5(invalid); got != "" {
+			t.Fatalf("invalid MD5 %q normalized to %q", invalid, got)
+		}
+	}
+}
+
 func TestAccessSharePageExtractsNestedMetadata(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/s/1Synthetic" {

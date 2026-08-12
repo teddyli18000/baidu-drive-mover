@@ -23,7 +23,7 @@ func (c *Client) ListStagingPathForCleanup(ctx context.Context, remotePath strin
 		return nil, fmt.Errorf("refusing cleanup inspection of global Baidu staging root")
 	}
 	query := url.Values{}
-	query.Set("app_id", panAppID)
+	query.Set("app_id", pcsAppID)
 	query.Set("method", "list")
 	query.Set("path", clean)
 	query.Set("by", "name")
@@ -67,7 +67,7 @@ func (c *Client) DeleteStagingPath(ctx context.Context, remotePath string) error
 		return fmt.Errorf("refusing to delete global Baidu staging root")
 	}
 	query := url.Values{}
-	query.Set("app_id", panAppID)
+	query.Set("app_id", pcsAppID)
 	query.Set("method", "delete")
 	query.Set("path", clean)
 	body, status, err := c.doPCS(ctx, http.MethodPost, "/rest/2.0/pcs/file", query, nil, 2<<20)

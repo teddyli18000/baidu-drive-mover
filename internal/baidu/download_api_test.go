@@ -21,6 +21,9 @@ func TestOpenDownloadFresh(t *testing.T) {
 		if r.URL.Query().Get("path") != "/BaiduDriveMover/task/b/file.bin" {
 			t.Errorf("unexpected path %q", r.URL.Query().Get("path"))
 		}
+		if got := r.URL.Query().Get("app_id"); got != pcsAppID {
+			t.Errorf("PCS app_id=%q want=%q", got, pcsAppID)
+		}
 		fmt.Fprint(w, payload)
 	}))
 	defer server.Close()
