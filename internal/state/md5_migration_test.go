@@ -25,10 +25,10 @@ func TestMigrationV6ClearsInvalidMD5AndRecoversOnlyMatchingFailure(t *testing.T)
 			t.Fatal(err)
 		}
 	}
-	if _, err := store.db.Exec(`UPDATE files SET status='FAILED_PERMANENT', baidu_staging_path='/BaiduDriveMover/recover/b/a.bin', local_cache_path='cache/recover/1.bin', retry_count=1, last_error='cache MD5 mismatch' WHERE task_id='recover'`); err != nil {
+	if _, err := store.db.Exec(`UPDATE files SET status='FAILED_PERMANENT', md5=' 0123456789abcdef0123456789abcdef ', baidu_staging_path='/BaiduDriveMover/recover/b/a.bin', local_cache_path='cache/recover/1.bin', retry_count=1, last_error='cache MD5 mismatch' WHERE task_id='recover'`); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.db.Exec(`UPDATE files SET status='FAILED_PERMANENT', baidu_staging_path='/BaiduDriveMover/preserve/b/a.bin', retry_count=2, last_error='unrelated permanent failure' WHERE task_id='preserve'`); err != nil {
+	if _, err := store.db.Exec(`UPDATE files SET status='FAILED_PERMANENT', md5=' 0123456789abcdef0123456789abcdef ', baidu_staging_path='/BaiduDriveMover/preserve/b/a.bin', retry_count=2, last_error='unrelated permanent failure' WHERE task_id='preserve'`); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := store.db.Exec(`DELETE FROM schema_migrations WHERE version=6`); err != nil {
@@ -52,13 +52,13 @@ func TestMigrationV6ClearsInvalidMD5AndRecoversOnlyMatchingFailure(t *testing.T)
 	}
 	var status, md5, localCache, lastError string
 	var retryCount int
-	if err := store.db.QueryRow(`SELECT status, md5, local_cache_path, retry_count, last_error FROM files WHERE task_id='recover'`).Scan(&status, &md5, &localCache, &retryCount, &lastError); err != nil {
+	if err := store.db.QueryRowContext(ctx, `SELECT status, md5, local_cache_path, retry_count, last_error FROM files WHERE task_id='recover'`).Scan(&status, &md5, &localCache, &retryCount, &lastError); err != nil {
 		t.Fatal(err)
 	}
 	if status != string(FileBaiduStaged) || md5 != "" || localCache == "" || retryCount != 0 || lastError != "" {
 		t.Fatalf("recovered file status=%s md5=%q cache=%t retries=%d error=%q", status, md5, localCache != "", retryCount, lastError)
 	}
-	if err := store.db.QueryRow(`SELECT status, md5, retry_count, last_error FROM files WHERE task_id='preserve'`).Scan(&status, &md5, &retryCount, &lastError); err != nil {
+	if err := store.db.QueryRowContext(ctx, `SELECT status, md5, retry_count, last_error FROM files WHERE task_id='preserve'`).Scan(&status, &md5, &retryCount, &lastError); err != nil {
 		t.Fatal(err)
 	}
 	if status != string(FileFailedPermanent) || md5 != "" || retryCount != 2 || lastError == "" {

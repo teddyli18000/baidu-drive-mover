@@ -282,7 +282,7 @@ func migrationV5(ctx context.Context, tx *sql.Tx) error {
 }
 
 func migrationV6(ctx context.Context, tx *sql.Tx) error {
-	invalidMD5 := `(TRIM(md5) != '' AND (LENGTH(TRIM(md5)) != 32 OR LOWER(TRIM(md5)) GLOB '*[^0-9a-f]*'))`
+	invalidMD5 := `(md5 != '' AND (LENGTH(md5) != 32 OR LOWER(md5) GLOB '*[^0-9a-f]*'))`
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	if _, err := tx.ExecContext(ctx, `
 UPDATE tasks

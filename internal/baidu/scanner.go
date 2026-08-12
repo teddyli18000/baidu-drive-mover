@@ -342,16 +342,15 @@ func safeShareEntryName(raw string) (string, error) {
 }
 
 func normalizeShareMD5(raw string) string {
-	value := strings.TrimSpace(raw)
-	if len(value) != 32 {
+	if len(raw) != 32 {
 		return ""
 	}
-	for _, char := range value {
+	for _, char := range raw {
 		if !((char >= '0' && char <= '9') || (char >= 'a' && char <= 'f') || (char >= 'A' && char <= 'F')) {
 			return ""
 		}
 	}
-	return strings.ToLower(value)
+	return strings.ToLower(raw)
 }
 
 func canonicalRemoteItemPath(raw string) (string, error) {

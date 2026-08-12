@@ -314,7 +314,7 @@ Reason: Baidu returns parameter error `2` when an account attempts to save its o
 
 ## D30. Only canonical provider MD5 values are source evidence
 
-Decision: a Baidu share-list `md5` is accepted only when its trimmed value is exactly 32 hexadecimal characters; accepted values are normalized to lowercase. Any other non-empty value is treated as unavailable rather than as a checksum. Download still enforces exact size, computes the local MD5, and Drive completion still requires equality with Drive's independently returned MD5.
+Decision: a Baidu share-list `md5` is accepted only when the raw value is exactly 32 hexadecimal characters, with no leading or trailing whitespace; accepted values are then normalized to lowercase. Any other non-empty value is treated as unavailable rather than as a checksum. Download still enforces exact size, computes the local MD5, and Drive completion still requires equality with Drive's independently returned MD5.
 
 Schema v6 clears previously persisted non-canonical provider MD5 values. It narrowly recovers a staged file from `FAILED_PERMANENT` only when that invalid value caused a recorded cache-MD5 mismatch, retaining the cache path for fresh validation. Unrelated permanent failures remain permanent.
 
