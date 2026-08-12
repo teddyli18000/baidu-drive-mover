@@ -51,6 +51,8 @@ Drive fixtures must cover:
 - upload success
 - resumable upload interruption
 - retryable errors
+- pre-commit upload failures retry only after two successful absence reconciliations and stop after three total writes
+- post-commit upload failures adopt the matching object without replaying the write
 - auth expiration
 - verification mismatch
 - duplicate/restart reconciliation

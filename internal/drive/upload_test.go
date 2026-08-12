@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/teddyli18000/baidu-drive-mover/internal/drive/rclone"
 	"github.com/teddyli18000/baidu-drive-mover/internal/manifest"
@@ -20,12 +21,13 @@ import (
 )
 
 type fakeUploadRemote struct {
-	rootID             string
-	files              map[string][]remoteItem
-	calls              []string
-	nextID             int
-	copyErrAfterCommit bool
-	mutateSource       bool
+	rootID                 string
+	files                  map[string][]remoteItem
+	calls                  []string
+	nextID                 int
+	copyErrAfterCommit     bool
+	copyErrorsBeforeCommit int
+	mutateSource           bool
 }
 
 func newFakeUploadRemote(rootID string) *fakeUploadRemote {
@@ -56,6 +58,10 @@ func (f *fakeUploadRemote) RunTask(_ context.Context, rootID, command string, ar
 		destination, err := fakeLogicalFromRemote(args[1])
 		if err != nil {
 			return rclone.Result{}, err
+		}
+		if f.copyErrorsBeforeCommit > 0 {
+			f.copyErrorsBeforeCommit--
+			return rclone.Result{}, errors.New("synthetic pre-commit transport failure")
 		}
 		data, err := os.ReadFile(source)
 		if err != nil {
@@ -90,6 +96,51 @@ func (f *fakeUploadRemote) RunTask(_ context.Context, rootID, command string, ar
 		return rclone.Result{}, nil
 	default:
 		return rclone.Result{}, fmt.Errorf("unexpected upload command %q", command)
+	}
+}
+
+func TestUploaderRetriesOnlyAfterDriveProvesNoCommittedObject(t *testing.T) {
+	store, layout, _, data := newUploadFixture(t, "task-safe-retry", "410", "/retry.bin", []byte("retry safely"))
+	remote := newFakeUploadRemote("root-upload")
+	remote.copyErrorsBeforeCommit = 2
+	delays := 0
+	uploader := &Uploader{
+		Layout: layout, State: store, Remote: remote,
+		RetryDelay: func(context.Context, time.Duration) error { delays++; return nil },
+	}
+	summary, err := uploader.Run(context.Background(), "task-safe-retry")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if summary.FilesVerified != 1 || summary.BytesVerified != int64(len(data)) {
+		t.Fatalf("summary=%+v", summary)
+	}
+	if countCommand(remote.calls, "copyto") != 3 || delays != 2 {
+		t.Fatalf("unsafe retry sequence calls=%v delays=%d", remote.calls, delays)
+	}
+}
+
+func TestUploaderBoundsSafeUploadRetries(t *testing.T) {
+	store, layout, file, _ := newUploadFixture(t, "task-safe-retry-bound", "411", "/retry.bin", []byte("still failing"))
+	remote := newFakeUploadRemote("root-upload")
+	remote.copyErrorsBeforeCommit = maxSafeUploadAttempts
+	delays := 0
+	uploader := &Uploader{
+		Layout: layout, State: store, Remote: remote,
+		RetryDelay: func(context.Context, time.Duration) error { delays++; return nil },
+	}
+	if _, err := uploader.Run(context.Background(), "task-safe-retry-bound"); err == nil {
+		t.Fatal("expected bounded upload failure")
+	}
+	if countCommand(remote.calls, "copyto") != maxSafeUploadAttempts || delays != maxSafeUploadAttempts-1 {
+		t.Fatalf("unbounded or incomplete retry sequence calls=%v delays=%d", remote.calls, delays)
+	}
+	updated, err := store.GetFile(context.Background(), file.TaskID, file.FileID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated.Status != state.FileDriveUploading || updated.RetryCount != 1 {
+		t.Fatalf("failed retry state=%s retries=%d", updated.Status, updated.RetryCount)
 	}
 }
 

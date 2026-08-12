@@ -12,6 +12,7 @@ import (
 	"path"
 	"regexp"
 	"strings"
+	"time"
 
 	"github.com/teddyli18000/baidu-drive-mover/internal/drive/rclone"
 	runtimepath "github.com/teddyli18000/baidu-drive-mover/internal/runtime"
@@ -34,10 +35,13 @@ type UploadRemote interface {
 }
 
 type Uploader struct {
-	Layout *runtimepath.Layout
-	State  UploadState
-	Remote UploadRemote
+	Layout     *runtimepath.Layout
+	State      UploadState
+	Remote     UploadRemote
+	RetryDelay func(context.Context, time.Duration) error
 }
+
+const maxSafeUploadAttempts = 3
 
 type UploadSummary struct {
 	FilesVerified int
@@ -137,26 +141,48 @@ func (u *Uploader) uploadOne(ctx context.Context, rootID string, file state.File
 	if err != nil {
 		return false, uploadPermanent(err)
 	}
-	_, copyErr := u.Remote.RunTask(ctx, rootID, "copyto", localPath, destination,
-		"--ignore-existing", "--checksum", "--retries", "1", "--low-level-retries", "3")
+	var reconcileErr error
+	for attempt := 1; ; attempt++ {
+		_, copyErr := u.Remote.RunTask(ctx, rootID, "copyto", localPath, destination,
+			"--ignore-existing", "--checksum", "--retries", "1", "--low-level-retries", "3")
 
-	// Reconcile even when copyto reports an error. The remote commit may have
-	// succeeded immediately before the local process observed a failure.
-	matches, reconcileErr := u.listNamedFiles(ctx, rootID, file.ParentPath, file.Name)
-	if reconcileErr != nil {
-		if copyErr != nil {
-			return false, fmt.Errorf("rclone upload failed and Drive reconciliation failed")
+		// Reconcile even when copyto reports an error. The remote commit may have
+		// succeeded immediately before the local process observed a failure.
+		matches, reconcileErr = u.listNamedFiles(ctx, rootID, file.ParentPath, file.Name)
+		if reconcileErr != nil {
+			if copyErr != nil {
+				return false, fmt.Errorf("rclone upload failed and Drive reconciliation failed")
+			}
+			return false, reconcileErr
 		}
-		return false, reconcileErr
-	}
-	if len(matches) > 1 {
-		return false, uploadPermanent(fmt.Errorf("Drive upload produced %d same-name objects for %q", len(matches), file.LogicalPath))
-	}
-	if len(matches) == 0 {
-		if copyErr != nil {
+		if len(matches) > 1 {
+			return false, uploadPermanent(fmt.Errorf("Drive upload produced %d same-name objects for %q", len(matches), file.LogicalPath))
+		}
+		if len(matches) == 1 {
+			break
+		}
+		if copyErr == nil {
+			return false, fmt.Errorf("rclone upload returned success but no Drive object was observed")
+		}
+		if attempt >= maxSafeUploadAttempts {
 			return false, fmt.Errorf("rclone upload failed before a matching Drive object could be proven")
 		}
-		return false, fmt.Errorf("rclone upload returned success but no Drive object was observed")
+		if err := u.waitRetry(ctx, time.Duration(1<<(attempt-1))*time.Second); err != nil {
+			return false, err
+		}
+
+		// Reconcile again after the delay. Only replay the write when Drive still
+		// proves that no same-name destination object exists.
+		matches, reconcileErr = u.listNamedFiles(ctx, rootID, file.ParentPath, file.Name)
+		if reconcileErr != nil {
+			return false, fmt.Errorf("Drive reconciliation before upload retry failed")
+		}
+		if len(matches) > 1 {
+			return false, uploadPermanent(fmt.Errorf("Drive upload produced %d same-name objects for %q", len(matches), file.LogicalPath))
+		}
+		if len(matches) == 1 {
+			break
+		}
 	}
 	if err := verifyRemoteFile(matches[0], file.Size, localMD5); err != nil {
 		return false, uploadPermanent(fmt.Errorf("Drive upload evidence for %q failed verification: %w", file.LogicalPath, err))
@@ -165,6 +191,20 @@ func (u *Uploader) uploadOne(ctx context.Context, rootID string, file state.File
 		return false, err
 	}
 	return u.verifyPersistedRemote(ctx, rootID, file, localMD5, matches[0].ID)
+}
+
+func (u *Uploader) waitRetry(ctx context.Context, delay time.Duration) error {
+	if u.RetryDelay != nil {
+		return u.RetryDelay(ctx, delay)
+	}
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
 }
 
 func (u *Uploader) verifyPersistedRemote(ctx context.Context, rootID string, file state.File, initialLocalMD5, expectedID string) (bool, error) {

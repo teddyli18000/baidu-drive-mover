@@ -319,3 +319,9 @@ Decision: a Baidu share-list `md5` is accepted only when the raw value is exactl
 Schema v6 clears previously persisted non-canonical provider MD5 values. It narrowly recovers a staged file from `FAILED_PERMANENT` only when that invalid value caused a recorded cache-MD5 mismatch, retaining the cache path for fresh validation. Unrelated permanent failures remain permanent.
 
 Reason: live share enumeration returned a 32-character provider field containing non-hexadecimal characters for every file. Comparing that opaque value to a real MD5 falsely rejected correct downloads. Treating only canonical digests as optional source evidence preserves fail-closed Drive verification without granting an undocumented provider token checksum authority.
+
+## D31. Drive upload retries require a proven-empty destination
+
+Decision: a failed rclone `copyto` may be retried at most twice by the uploader, with cancellable one- and two-second delays. Every failed write is followed by Drive listing reconciliation, then a second listing after the delay. The next write is allowed only when both reads prove that no same-name object exists. A discovered matching object is adopted and independently verified; duplicate or conflicting objects fail permanently, and a failed reconciliation stops without replaying the write.
+
+Reason: controlled live migration observed transient pre-commit rclone failures that safely blocked the task but required manual resume. Retrying only after two successful absence proofs preserves the no-blind-replay invariant while allowing unattended migration to survive short transport failures.

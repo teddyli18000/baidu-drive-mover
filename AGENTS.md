@@ -52,6 +52,7 @@ All automatic deletion must go through a centralized provenance/containment guar
 - Never log cookies/tokens/Authorization headers/signed download URLs.
 - Never send telemetry.
 - Retry transient service failures with bounded backoff; do not spin aggressively.
+- Drive upload write retries are owned by the uploader, not the rclone runner: reconcile immediately and again after a cancellable delay, then replay only when both reads prove the same-name destination is absent.
 - Keep provider application identities endpoint-specific: PAN Web/share/copy operations use `250528`; PCS staging `mkdir`/`list`/`download`/`delete` use `266719`.
 - When the logged-in account owns the share (`uk == share_uk`), stage through bounded PAN account-internal copy after hardened `fs_id`-to-source-path resolution; `/share/transfer` is only for a different share owner.
 - Baidu share-list `fs_id`, `isdir`, and `size` values may arrive as either numbers or quoted decimal strings; decode both strictly into bounded integers and reject whitespace, signs other than `-`, fractions, exponents, non-digits, and overflow. Require `isdir` to be exactly 0 or 1 and `size` to be non-negative.
