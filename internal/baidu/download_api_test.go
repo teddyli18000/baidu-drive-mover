@@ -37,7 +37,7 @@ func TestOpenDownloadFresh(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if string(data) != payload || stream.Start != 0 || stream.Total != int64(len(payload)) || stream.Partial {
+	if string(data) != payload || stream.Start != 0 || stream.End != 10 || stream.Total != int64(len(payload)) || stream.Partial {
 		t.Fatalf("unexpected stream=%+v body=%q", stream, data)
 	}
 }
@@ -60,8 +60,60 @@ func TestOpenDownloadResumeValidatesContentRange(t *testing.T) {
 	}
 	defer stream.Body.Close()
 	data, _ := io.ReadAll(stream.Body)
-	if string(data) != "world" || !stream.Partial || stream.Start != 6 || stream.Total != 11 || stream.Remaining != 5 {
+	if string(data) != "world" || !stream.Partial || stream.Start != 6 || stream.End != 10 || stream.Total != 11 || stream.Remaining != 5 {
 		t.Fatalf("unexpected stream=%+v body=%q", stream, data)
+	}
+}
+
+func TestOpenDownloadRangeRequestsExactBoundedChunk(t *testing.T) {
+	payload := "hello world"
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Range") != "bytes=2-5" {
+			t.Errorf("Range=%q", r.Header.Get("Range"))
+		}
+		w.Header().Set("Content-Range", "bytes 2-5/11")
+		w.WriteHeader(http.StatusPartialContent)
+		fmt.Fprint(w, payload[2:6])
+	}))
+	defer server.Close()
+	client, _ := NewClient("BDUSS=fake; STOKEN=fake", WithBaseURL(server.URL), WithPCSBaseURL(server.URL))
+	stream, err := client.OpenDownloadRange(context.Background(), "/BaiduDriveMover/task/b/file.bin", 2, 5)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer stream.Body.Close()
+	data, _ := io.ReadAll(stream.Body)
+	if string(data) != "llo " || !stream.Partial || stream.Start != 2 || stream.End != 5 || stream.Total != 11 || stream.Remaining != 4 {
+		t.Fatalf("unexpected stream=%+v body=%q", stream, data)
+	}
+}
+
+func TestOpenDownloadRangeFromZeroStillRequiresPartialResponse(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Range") != "bytes=0-4" {
+			t.Errorf("Range=%q", r.Header.Get("Range"))
+		}
+		fmt.Fprint(w, "hello world")
+	}))
+	defer server.Close()
+	client, _ := NewClient("BDUSS=fake; STOKEN=fake", WithBaseURL(server.URL), WithPCSBaseURL(server.URL))
+	_, err := client.OpenDownloadRange(context.Background(), "/BaiduDriveMover/task/b/file.bin", 0, 4)
+	if !errors.Is(err, ErrRangeNotHonored) {
+		t.Fatalf("expected range-not-honored, got %v", err)
+	}
+}
+
+func TestOpenDownloadRangeRejectsWrongReturnedEnd(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Range", "bytes 2-6/11")
+		w.WriteHeader(http.StatusPartialContent)
+		fmt.Fprint(w, "llo w")
+	}))
+	defer server.Close()
+	client, _ := NewClient("BDUSS=fake; STOKEN=fake", WithBaseURL(server.URL), WithPCSBaseURL(server.URL))
+	_, err := client.OpenDownloadRange(context.Background(), "/BaiduDriveMover/task/b/file.bin", 2, 5)
+	if !errors.Is(err, ErrRangeNotHonored) {
+		t.Fatalf("expected range-not-honored, got %v", err)
 	}
 }
 
@@ -74,6 +126,18 @@ func TestOpenDownloadRejectsIgnoredRange(t *testing.T) {
 	_, err := client.OpenDownload(context.Background(), "/BaiduDriveMover/task/b/file.bin", 5)
 	if !errors.Is(err, ErrRangeNotHonored) {
 		t.Fatalf("expected range-not-honored, got %v", err)
+	}
+}
+
+func TestOpenDownloadRangeRejectsInvalidBoundsBeforeNetwork(t *testing.T) {
+	client, _ := NewClient("BDUSS=fake; STOKEN=fake")
+	for _, tc := range []struct {
+		start int64
+		end   int64
+	}{{-1, 4}, {5, 4}, {0, -2}} {
+		if _, err := client.OpenDownloadRange(context.Background(), "/BaiduDriveMover/task/b/file.bin", tc.start, tc.end); err == nil {
+			t.Fatalf("expected invalid bounds for %d-%d", tc.start, tc.end)
+		}
 	}
 }
 
