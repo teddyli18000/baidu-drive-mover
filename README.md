@@ -2,6 +2,10 @@
 
 Windows CLI tool for moving arbitrary Baidu Netdisk share links to Google Drive with resumable staged transfer.
 
+## Related Actions integration
+
+An Actions-native control plane for low-frequency public-share transfers is now being developed under [`teddyli18000/web-ingest`](https://github.com/teddyli18000/web-ingest/tree/main/baidu-drive). It reuses this project's bounded staging, resumability, verification, and fail-closed cleanup principles, but uses a fixed GitHub Release as the human/bot control surface and repository-owned non-secret state for Actions recovery. Authentication/secret provisioning for that worker is intentionally not wired yet. This repository remains the standalone Windows CLI implementation and is not deprecated by that integration.
+
 ## Product goal
 
 Normal use should be:
