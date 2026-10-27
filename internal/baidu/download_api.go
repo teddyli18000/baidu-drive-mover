@@ -13,13 +13,14 @@ import (
 )
 
 var (
-	ErrRangeNotHonored     = errors.New("Baidu download server did not honor resume range")
+	ErrRangeNotHonored     = errors.New("Baidu download server did not honor requested range")
 	ErrRangeNotSatisfiable = errors.New("Baidu download range is not satisfiable")
 )
 
 type DownloadStream struct {
 	Body        io.ReadCloser
 	Start       int64
+	End         int64
 	Remaining   int64
 	Total       int64
 	Partial     bool
@@ -27,15 +28,30 @@ type DownloadStream struct {
 }
 
 // OpenDownload opens a streaming PCS download for a tool-owned staged file.
-// The returned body must be closed by the caller.
+// The returned body must be closed by the caller. offset=0 keeps the legacy
+// full-file request; offset>0 requests bytes=offset- for resumable download.
 func (c *Client) OpenDownload(ctx context.Context, remotePath string, offset int64) (*DownloadStream, error) {
+	return c.OpenDownloadRange(ctx, remotePath, offset, -1)
+}
+
+// OpenDownloadRange opens a bounded or open-ended PCS byte range for a
+// tool-owned staged file. end is inclusive; end=-1 means through EOF.
+//
+// A bounded request always requires HTTP 206 and an exact Content-Range start
+// and end. This makes the primitive safe for disposable-runner relay workers:
+// callers never need to accept more bytes than the chunk they scheduled.
+func (c *Client) OpenDownloadRange(ctx context.Context, remotePath string, start, end int64) (*DownloadStream, error) {
 	clean, err := validateStagingRemotePath(remotePath)
 	if err != nil {
 		return nil, err
 	}
-	if offset < 0 {
-		return nil, fmt.Errorf("negative Baidu download offset %d", offset)
+	if start < 0 {
+		return nil, fmt.Errorf("negative Baidu download start %d", start)
 	}
+	if end < -1 || (end >= 0 && end < start) {
+		return nil, fmt.Errorf("invalid Baidu download range %d-%d", start, end)
+	}
+
 	query := url.Values{}
 	query.Set("app_id", pcsAppID)
 	query.Set("method", "download")
@@ -48,9 +64,14 @@ func (c *Client) OpenDownload(ctx context.Context, remotePath string, offset int
 	}
 	request.Header.Set("User-Agent", defaultUserAgent)
 	request.Header.Set("Accept", "*/*")
-	if offset > 0 {
-		request.Header.Set("Range", fmt.Sprintf("bytes=%d-", offset))
+
+	ranged := start > 0 || end >= 0
+	if end >= 0 {
+		request.Header.Set("Range", fmt.Sprintf("bytes=%d-%d", start, end))
+	} else if start > 0 {
+		request.Header.Set("Range", fmt.Sprintf("bytes=%d-", start))
 	}
+
 	response, err := c.httpClient.Do(request)
 	if err != nil {
 		return nil, fmt.Errorf("open Baidu download stream: %w", err)
@@ -64,7 +85,7 @@ func (c *Client) OpenDownload(ctx context.Context, remotePath string, offset int
 		defer response.Body.Close()
 		return nil, classifyDownloadHTTPError(response)
 	}
-	if offset > 0 && response.StatusCode != http.StatusPartialContent {
+	if ranged && response.StatusCode != http.StatusPartialContent {
 		response.Body.Close()
 		return nil, ErrRangeNotHonored
 	}
@@ -72,26 +93,30 @@ func (c *Client) OpenDownload(ctx context.Context, remotePath string, offset int
 	stream := &DownloadStream{
 		Body:        response.Body,
 		Start:       0,
+		End:         response.ContentLength - 1,
 		Remaining:   response.ContentLength,
 		Total:       response.ContentLength,
 		Partial:     response.StatusCode == http.StatusPartialContent,
 		ContentType: response.Header.Get("Content-Type"),
 	}
 	if response.StatusCode == http.StatusPartialContent {
-		start, end, total, err := parseContentRange(response.Header.Get("Content-Range"))
+		actualStart, actualEnd, total, err := parseContentRange(response.Header.Get("Content-Range"))
 		if err != nil {
 			response.Body.Close()
 			return nil, err
 		}
-		if start != offset {
+		if actualStart != start {
 			response.Body.Close()
-			return nil, fmt.Errorf("Baidu resume started at %d instead of %d: %w", start, offset, ErrRangeNotHonored)
+			return nil, fmt.Errorf("Baidu range started at %d instead of %d: %w", actualStart, start, ErrRangeNotHonored)
 		}
-		stream.Start = start
+		if end >= 0 && actualEnd != end {
+			response.Body.Close()
+			return nil, fmt.Errorf("Baidu range ended at %d instead of %d: %w", actualEnd, end, ErrRangeNotHonored)
+		}
+		stream.Start = actualStart
+		stream.End = actualEnd
 		stream.Total = total
-		if end >= start {
-			stream.Remaining = end - start + 1
-		}
+		stream.Remaining = actualEnd - actualStart + 1
 	}
 	return stream, nil
 }
